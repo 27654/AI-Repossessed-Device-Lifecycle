@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
+import { useAuth } from '../auth/useAuth'
 import { getHealth, type HealthStatus } from '../lib/api'
 
 export default function DashboardPage() {
+  const { user } = useAuth()
   const [health, setHealth] = useState<HealthStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -14,6 +16,11 @@ export default function DashboardPage() {
   return (
     <div className="space-y-4">
       <h2 className="text-xl font-semibold">Dashboard</h2>
+      {user && (
+        <p className="text-sm text-slate-700">
+          Welcome, {user.full_name}. You are signed in as <strong>{user.role?.name ?? 'a user without a role'}</strong>.
+        </p>
+      )}
       <p className="text-sm text-slate-600">Role-specific dashboards are added in a later phase.</p>
 
       <section className="max-w-md rounded-lg border border-slate-200 bg-white p-4">

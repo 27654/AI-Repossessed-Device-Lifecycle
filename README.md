@@ -73,7 +73,7 @@ cd backend
 python3.12 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 .venv/bin/python manage.py migrate
-.venv/bin/python manage.py createsuperuser   # optional, for /admin
+.venv/bin/python manage.py createsuperuser   # first System Administrator (see First sign-in)
 cd ..
 ```
 
@@ -105,15 +105,15 @@ Open http://localhost:5173. The dev server forwards `/api` requests to Django, a
 
 Health check: http://127.0.0.1:8000/api/health/
 
-### Running without PostgreSQL
+### First sign-in
 
-For a quick look without a database server, prefix backend commands with `DB_ENGINE=sqlite`:
+There is no public registration. Create the first System Administrator from the command line:
 
 ```bash
-cd backend && DB_ENGINE=sqlite .venv/bin/python manage.py migrate && DB_ENGINE=sqlite .venv/bin/python manage.py runserver
+cd backend && .venv/bin/python manage.py createsuperuser
 ```
 
-PostgreSQL remains the target database.
+It asks for email, full name, employee ID and password. Sign in at http://localhost:5173/login, then turn on two-step verification under **My account** (click your name in the header). The administrator creates other staff accounts through `POST /api/users/` until the user-management screen is built.
 
 ## Tests and build
 
@@ -126,5 +126,7 @@ cd frontend && npm run lint                      # lint
 ## Security notes
 
 - Secrets live only in `.env`, which is git-ignored. Never commit it.
-- Every API endpoint requires login by default. Role permissions are enforced on the backend, not just hidden in the UI.
+- Every API endpoint requires login by default (401 if not signed in, 403 if the role lacks the permission). Role permissions are enforced on the backend, not just hidden in the UI.
+- TOTP secrets are encrypted at rest (`MFA_ENCRYPTION_KEY`, see `.env.example`).
+- The Django admin (`/admin/`) uses password-only login without MFA or audit, so it is mounted only when `DJANGO_DEBUG=true`.
 - The AI component is a **prototype rule-based decision-support engine**, not a trained machine-learning model. Its recommendations never change a device's status on their own.

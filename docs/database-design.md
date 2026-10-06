@@ -27,21 +27,23 @@ Conventions:
 | code | varchar(60), unique | e.g. `device.create`, `ai.decide` (matrix in architecture.md §5) |
 | description | varchar(200) | |
 
-### User (`accounts_user`, extends Django `AbstractUser`)
+### User (`accounts_user`, extends Django `AbstractBaseUser` + `PermissionsMixin`)
 | Field | Type | Notes |
 |---|---|---|
 | email | varchar, unique | Login identifier |
-| first_name, last_name | varchar | Name |
+| full_name | varchar(150) | |
 | phone | varchar(20) | |
 | employee_id | varchar(30), unique | |
 | role | FK → Role | One role per user |
 | account_status | enum | `ACTIVE`, `SUSPENDED`, `DEACTIVATED` |
 | password | varchar | Django hash, never exposed |
 | mfa_enabled | bool | |
-| mfa_secret | varchar(64), nullable | TOTP secret, never serialized |
+| mfa_secret | varchar(255), blank | TOTP secret, Fernet-encrypted, never serialized |
+| mfa_last_used_step | bigint, nullable | Last accepted TOTP time step (replay protection) |
 | failed_login_count | int | Reset on success |
 | locked_until | timestamptz, nullable | Temporary lockout |
-| last_login, date_joined, updated_at | timestamptz | |
+| is_staff, is_superuser | bool | Django admin access only; app permissions come from the role |
+| last_login, created_at, updated_at | timestamptz | |
 
 ### LoginAttempt
 | Field | Type | Notes |

@@ -66,6 +66,7 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "accounts.middleware.SessionTimeoutMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -91,39 +92,31 @@ WSGI_APPLICATION = "config.wsgi.application"
 
 
 # Database
-# PostgreSQL is the target database. DB_ENGINE=sqlite is a local fallback for
-# quick runs without a PostgreSQL server; it is not used for the real system.
+# PostgreSQL is the only supported database, for development and tests alike.
+# `manage.py test` creates a separate `test_repossessed_devices` database.
 
-DB_ENGINE = os.environ.get("DB_ENGINE", "postgresql").strip().lower()
-
-if DB_ENGINE == "sqlite":
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.sqlite3",
-            "NAME": BASE_DIR / "db.sqlite3",
-        }
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": os.environ.get("DB_NAME", "repossessed_devices"),
+        "USER": os.environ.get("DB_USER", "postgres"),
+        "PASSWORD": os.environ.get("DB_PASSWORD", ""),
+        "HOST": os.environ.get("DB_HOST", "localhost"),
+        "PORT": os.environ.get("DB_PORT", "5432"),
+        "CONN_MAX_AGE": 60,
     }
-elif DB_ENGINE == "postgresql":
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.postgresql",
-            "NAME": os.environ.get("DB_NAME", "repossessed_devices"),
-            "USER": os.environ.get("DB_USER", "postgres"),
-            "PASSWORD": os.environ.get("DB_PASSWORD", ""),
-            "HOST": os.environ.get("DB_HOST", "localhost"),
-            "PORT": os.environ.get("DB_PORT", "5432"),
-            "CONN_MAX_AGE": 60,
-        }
-    }
-else:
-    raise ImproperlyConfigured(f"Unsupported DB_ENGINE '{DB_ENGINE}'. Use 'postgresql' or 'sqlite'.")
+}
 
 
 # Authentication
-# Custom user model is defined from the start so staff fields (employee ID,
-# phone, role, status) can be added without a painful mid-project migration.
+# Staff log in with email + password, then a TOTP code if MFA is enabled.
+# Application permissions come from the user's role (accounts.rbac).
 
 AUTH_USER_MODEL = "accounts.User"
+
+# Lock an account for LOGIN_LOCKOUT_MINUTES after this many consecutive failures.
+LOGIN_LOCKOUT_THRESHOLD = int(os.environ.get("LOGIN_LOCKOUT_THRESHOLD", 5))
+LOGIN_LOCKOUT_MINUTES = int(os.environ.get("LOGIN_LOCKOUT_MINUTES", 15))
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
@@ -137,7 +130,8 @@ AUTH_PASSWORD_VALIDATORS = [
 # Session cookie auth: the browser holds an HttpOnly session cookie; the
 # frontend sends the CSRF token header on unsafe requests.
 
-SESSION_COOKIE_AGE = int(os.environ.get("SESSION_COOKIE_AGE", 60 * 60 * 8))  # one working day
+SESSION_COOKIE_AGE = int(os.environ.get("SESSION_COOKIE_AGE", 60 * 60 * 8))  # maximum session length: one working day
+SESSION_IDLE_TIMEOUT = int(os.environ.get("SESSION_IDLE_TIMEOUT", 60 * 30))  # sign out after 30 idle minutes
 SESSION_EXPIRE_AT_BROWSER_CLOSE = True
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
@@ -157,11 +151,12 @@ SECURE_CONTENT_TYPE_NOSNIFF = True
 
 # Django REST Framework
 # Deny by default: every endpoint requires an authenticated user unless it
-# explicitly opts out (e.g. login, health check).
+# explicitly opts out (e.g. login, health check). Not logged in -> 401;
+# logged in without the role permission -> 403.
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "rest_framework.authentication.SessionAuthentication",
+        "accounts.authentication.SessionAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
@@ -204,3 +199,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # MFA (TOTP)
 
 MFA_ISSUER_NAME = os.environ.get("MFA_ISSUER_NAME", "Yellow Device Lifecycle")
+# Fernet key for encrypting TOTP secrets at rest. If empty, a key is derived from DJANGO_SECRET_KEY.
+MFA_ENCRYPTION_KEY = os.environ.get("MFA_ENCRYPTION_KEY", "")
+# Seconds a user has to enter the TOTP code after a correct password.
+MFA_PENDING_TIMEOUT = int(os.environ.get("MFA_PENDING_TIMEOUT", 300))

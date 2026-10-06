@@ -110,14 +110,18 @@ The Device is the hub. Lifecycle records hang off it and are never overwritten, 
 
 - **Internal staff only.** There is no public registration; a System Administrator creates accounts.
 - **Login by email + password.** Passwords are hashed with Django's default PBKDF2-SHA256 and checked against minimum-length, common-password and similarity validators.
-- **Server-side sessions.** On success Django sets an `HttpOnly`, `SameSite=Lax` session cookie (8-hour lifetime, ends when the browser closes). Unsafe requests must carry the `X-CSRFToken` header. No tokens are kept in `localStorage`.
+- **Server-side sessions.** On success Django sets an `HttpOnly`, `SameSite=Lax` session cookie that ends when the browser closes. Unsafe requests, including login and MFA verification, must carry the `X-CSRFToken` header. No tokens are kept in `localStorage`.
+- **Session timeout.** `SessionTimeoutMiddleware` signs the user out after 30 idle minutes (`SESSION_IDLE_TIMEOUT`) or 8 hours after login (`SESSION_COOKIE_AGE`), and audits `SESSION_EXPIRED`.
 - **TOTP MFA (`pyotp`).** Works with any authenticator app and runs fully offline:
   1. The user enrols from their profile. The server generates a secret and returns an `otpauth://` URI, shown as a QR code. Enrolment is confirmed by entering one valid code.
   2. At login, a correct password for an MFA-enabled user creates a *pending* session. Only a valid 6-digit code turns it into a full session.
-  3. **(Decision)** MFA is optional per user. A setting `MFA_REQUIRED_ROLES` can make it mandatory for chosen roles (e.g. System Administrator).
-  4. **(Decision)** The TOTP secret is stored in the user row, never returned by the API after enrolment, and never logged. Encrypting it at rest is noted as a production improvement.
-- **Login attempt tracking.** Every attempt is stored in `LoginAttempt` (email, user, success, reason, IP, user agent). **(Decision)** After 5 failures within 15 minutes the account is temporarily locked for 15 minutes.
+  3. **(Decision)** MFA is optional per user. Making it mandatory for chosen roles (e.g. System Administrator) is a possible later addition.
+  4. **(Decision)** The TOTP secret is stored Fernet-encrypted in the user row (`MFA_ENCRYPTION_KEY`, or a key derived from `DJANGO_SECRET_KEY`), shown only once during enrolment, and never logged. The last accepted time step is stored so a code cannot be used twice.
+  5. The pending state expires after 5 minutes (`MFA_PENDING_TIMEOUT`). Wrong codes count towards the lockout below.
+  6. An administrator can reset a user's MFA (lost phone) through `POST /api/users/{id}/reset-mfa/`.
+- **Login attempt tracking.** Every attempt is stored in `LoginAttempt` (email, user, success, reason, IP, user agent). **(Decision)** After 5 consecutive failed passwords or MFA codes the account is locked for 15 minutes (`LOGIN_LOCKOUT_THRESHOLD`, `LOGIN_LOCKOUT_MINUTES`). A successful login or an administrator password reset clears the counter.
 - **Account status.** `ACTIVE`, `SUSPENDED` or `DEACTIVATED`. Only active users can log in. Suspending a user ends their sessions.
+- **Passwords.** Users change their own password (current password required; other sessions end). There is no email, so "reset" means a System Administrator sets a temporary password (`POST /api/users/{id}/reset-password/`), which also ends the user's sessions.
 - **Role-based redirect.** After login, `/api/auth/me/` returns the user's role and permissions. The frontend sends each role to its own dashboard.
 
 ## 5. RBAC
@@ -127,7 +131,7 @@ The Device is the hub. Lifecycle records hang off it and are never overwritten, 
 **Backend enforcement (authoritative).**
 
 - DRF default: every endpoint requires an authenticated user. Only login, CSRF and health endpoints opt out.
-- Each view declares the permission codes it needs through a `HasPermission` permission class. Missing permission → **403**; not logged in → **403/401**.
+- Each view declares the permission codes it needs with `require_permission(Perm.X)` (`accounts/permissions.py`). Missing permission → **403**; not logged in → **401**.
 - Object-level checks where the spec needs them. For example, Refurbishment Staff may update only work orders assigned to them.
 - Querysets are filtered by role where appropriate, so list endpoints never leak records the user may not see.
 
@@ -241,7 +245,7 @@ REST, JSON, all under `/api/`. Lists are paginated (`?page=`, 20 per page) and a
 |---|---|
 | Health | `GET /api/health/` |
 | Auth | `GET /api/auth/csrf/` · `POST /api/auth/login/` · `POST /api/auth/mfa/verify/` · `POST /api/auth/logout/` · `GET/PATCH /api/auth/me/` · `POST /api/auth/change-password/` · `POST /api/auth/mfa/setup/`, `/mfa/confirm/`, `/mfa/disable/` |
-| Users & roles | `GET/POST /api/users/` · `GET/PATCH /api/users/{id}/` · `POST /api/users/{id}/reset-password/` · `GET /api/roles/` · `PATCH /api/roles/{id}/` · `GET /api/permissions/` · `GET /api/login-attempts/` |
+| Users & roles | `GET/POST /api/users/` · `GET/PATCH /api/users/{id}/` · `POST /api/users/{id}/reset-password/` · `POST /api/users/{id}/reset-mfa/` · `GET /api/roles/` · `PATCH /api/roles/{id}/` · `GET /api/permissions/` · `GET /api/login-attempts/` |
 | Devices | `GET/POST /api/devices/` (`?search=&status=&make=&condition=&recovered_from=&recovered_to=`) · `GET/PATCH /api/devices/{id}/` · `GET /api/devices/{id}/history/` · `GET/POST /api/devices/{id}/attachments/` |
 | Recovery | `GET/POST /api/recoveries/` · `GET/PATCH /api/recoveries/{id}/` (status: Initiated → In Transit → Received) |
 | Assessments | `GET/POST /api/assessments/` · `GET/PATCH /api/assessments/{id}/` |

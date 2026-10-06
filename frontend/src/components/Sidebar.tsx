@@ -1,4 +1,5 @@
 import { NavLink } from 'react-router-dom'
+import { useAuth } from '../auth/useAuth'
 import { navItems } from '../config/navigation'
 
 interface SidebarProps {
@@ -7,6 +8,9 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ open, onNavigate }: SidebarProps) {
+  const { hasPermission } = useAuth()
+  const visibleItems = navItems.filter((item) => !item.permission || hasPermission(item.permission))
+
   return (
     <aside
       className={`fixed inset-y-0 left-0 z-30 w-64 transform bg-slate-900 text-slate-100 transition-transform md:static md:translate-x-0 ${
@@ -18,7 +22,7 @@ export default function Sidebar({ open, onNavigate }: SidebarProps) {
         <span className="font-semibold">Device Lifecycle</span>
       </div>
       <nav className="space-y-1 p-3">
-        {navItems.map((item) => (
+        {visibleItems.map((item) => (
           <NavLink
             key={item.path}
             to={item.path}
