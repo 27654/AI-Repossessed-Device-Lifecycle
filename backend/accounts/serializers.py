@@ -2,7 +2,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
-from .models import Permission, Role, User
+from .models import LoginAttempt, Permission, Role, User
 
 
 class RoleSummarySerializer(serializers.ModelSerializer):
@@ -125,6 +125,13 @@ class UserSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         password = validated_data.pop("password")
         return User.objects.create_user(password=password, **validated_data)
+
+
+class LoginAttemptSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LoginAttempt
+        fields = ["id", "email_attempted", "user", "success", "failure_reason", "ip_address", "user_agent", "created_at"]
+        read_only_fields = fields
 
 
 class PermissionSerializer(serializers.ModelSerializer):

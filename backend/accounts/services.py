@@ -74,6 +74,7 @@ def _register_failure(request, email, user, failure):
             entity=user,
             description=f"Locked for {settings.LOGIN_LOCKOUT_MINUTES} minutes after "
             f"{settings.LOGIN_LOCKOUT_THRESHOLD} failed attempts.",
+            new_values={"locked_until": user.locked_until.isoformat()},
         )
     user.save(update_fields=["failed_login_count", "locked_until", "updated_at"])
 

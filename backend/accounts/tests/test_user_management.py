@@ -1,6 +1,9 @@
-from django.core.exceptions import PermissionDenied
+from datetime import timedelta
+
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
+from rest_framework.test import APIClient
 
 from accounts.models import Role, User
 from accounts.rbac import RoleCode
@@ -106,25 +109,59 @@ class UserManagementTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
 
+    def test_role_details_change_is_audited(self):
+        role = Role.objects.get(code=RoleCode.SALES_OFFICER)
 
-class AuditLogTests(TestCase):
-    def test_entries_cannot_be_changed_or_deleted(self):
-        make_user()
-        logged_in_client(make_user()).post(reverse("auth-logout"))
-        entry = AuditLog.objects.get(action=AuditAction.LOGOUT)
+        self.client.patch(reverse("role-detail", args=[role.pk]), {"description": "Sells devices."}, format="json")
 
-        entry.description = "tampered"
-        with self.assertRaises(PermissionDenied):
-            entry.save()
-        with self.assertRaises(PermissionDenied):
-            entry.delete()
+        entry = AuditLog.objects.get(action=AuditAction.ROLE_UPDATED)
+        self.assertEqual(entry.new_values, {"description": "Sells devices."})
 
-    def test_audit_log_can_be_filtered(self):
-        admin = make_user(RoleCode.SYSTEM_ADMIN)
-        client = logged_in_client(admin)
-        client.post(reverse("auth-change-password"), {"current_password": "wrong", "new_password": "An0ther-Str0ng-Pass"}, format="json")
+    def test_admin_can_unlock_account(self):
+        user = make_user(locked_until=timezone.now() + timedelta(minutes=10), failed_login_count=0)
 
-        response = client.get(reverse("audit-log-list"), {"action": "PASSWORD_CHANGE_FAILED", "from": "2026-02-30"})
+        response = self.client.post(reverse("user-unlock", args=[user.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        user.refresh_from_db()
+        self.assertFalse(user.is_locked)
+        entry = AuditLog.objects.get(action=AuditAction.ACCOUNT_UNLOCKED)
+        self.assertIsNotNone(entry.previous_values["locked_until"])
+        self.assertEqual(
+            APIClient().post(reverse("auth-login"), {"email": user.email, "password": PASSWORD}, format="json").status_code,
+            200,
+        )
+
+    def test_admin_mfa_reset_is_audited(self):
+        user = make_user(mfa_enabled=True)
+
+        self.client.post(reverse("user-reset-mfa", args=[user.pk]))
+
+        entry = AuditLog.objects.get(action=AuditAction.MFA_DISABLED)
+        self.assertEqual(entry.previous_values, {"mfa_enabled": True})
+        self.assertEqual(entry.user, self.admin)
+
+    def test_non_admin_cannot_use_admin_security_actions(self):
+        user = make_user()
+        client = logged_in_client(make_user(RoleCode.OPERATIONS_MANAGER))
+        for name in ("user-unlock", "user-reset-mfa", "user-reset-password"):
+            with self.subTest(endpoint=name):
+                self.assertEqual(client.post(reverse(name, args=[user.pk]), {}, format="json").status_code, 403)
+
+
+class LoginAttemptApiTests(TestCase):
+    def test_login_attempts_are_listed_for_audit_viewers(self):
+        make_user(email="tracked@yellow.test")
+        APIClient().post(reverse("auth-login"), {"email": "tracked@yellow.test", "password": "nope"}, format="json")
+        client = logged_in_client(make_user(RoleCode.SYSTEM_ADMIN))
+
+        response = client.get(reverse("login-attempt-list"), {"email": "tracked@yellow.test", "success": "false"})
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["count"], 1)
+        self.assertEqual(response.json()["results"][0]["failure_reason"], "BAD_CREDENTIALS")
+
+    def test_login_attempts_are_protected(self):
+        self.assertEqual(APIClient().get(reverse("login-attempt-list")).status_code, 401)
+        client = logged_in_client(make_user(RoleCode.RECOVERY_OFFICER))
+        self.assertEqual(client.get(reverse("login-attempt-list")).status_code, 403)

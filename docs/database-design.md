@@ -63,45 +63,57 @@ Conventions:
 ### Device (central entity)
 | Field | Type | Notes |
 |---|---|---|
-| device_code | varchar(20), unique | Human-readable ID, e.g. `YRW-2026-00042`, generated |
+| device_code | varchar(20), unique | Human-readable ID, e.g. `YRW-2026-00042`, numbered by the `devices_device_code_seq` sequence |
+| imei | varchar(15), unique, nullable | 15 digits (CHECK constraint), Luhn-validated by the API. Null for devices without an IMEI. |
+| serial_number | varchar(80), unique, nullable | Stored upper-case without spaces |
 | make | varchar(60) | indexed |
 | model | varchar(80) | indexed |
-| serial_number | varchar(80), unique | |
-| imei | varchar(15), unique, nullable | 15 digits, validated (Luhn). Nullable for devices without an IMEI. |
-| previous_owner_ref | varchar(60) | Pseudonymous customer reference only |
-| status | enum | `IN_RECOVERY`, `RECOVERED`, `ASSESSED`, `REFURBISHING`, `READY_FOR_DISPOSITION`, `REALLOCATED`, `RESOLD`, `UNABLE_TO_REPAIR`; indexed |
-| current_condition | enum, nullable | `EXCELLENT`, `GOOD`, `FAIR`, `POOR`; set from the latest submitted assessment |
+| device_type | enum | `SMARTPHONE`, `FEATURE_PHONE`, `TABLET`, `LAPTOP`, `TELEVISION`, `SOLAR_HOME_SYSTEM`, `OTHER` |
+| color | varchar(40) | |
+| storage_capacity_gb | int, nullable | Where applicable |
+| operating_system | varchar(60) | |
+| status | enum | `IN_RECOVERY`, `RECOVERED`, `ASSESSED`, `REFURBISHING`, `READY_FOR_DISPOSITION`, `REALLOCATED`, `RESOLD`, `UNABLE_TO_REPAIR`; indexed; CHECK constraint |
+| current_condition | enum, nullable | `EXCELLENT`, `GOOD`, `FAIR`, `POOR`; set from the latest submitted assessment (read-only in the device API) |
+| condition_summary | text | Free-text observations, e.g. on recovery |
+| current_location | varchar(200) | Warehouse, branch or district |
+| recovery_reference | varchar(60) | Repossession case / acquisition reference |
+| recovery_date | date, nullable | indexed; used by the `recovered_from`/`recovered_to` filters |
+| previous_owner_ref | varchar(60) | Pseudonymous Yellow account reference only (no names, national IDs or financial data) |
+| notes | text | |
 | created_by | FK → User | |
 | created_at, updated_at | timestamptz | |
 
+- CHECK: at least one of `imei` / `serial_number` is present.
 - *Lifecycle stage* is derived from `status` (architecture.md §6) and returned by the API, not stored.
-- *Recovery date* and *recovery location* come from the device's Recovery record; the API returns them with the device.
-- `status` and `current_condition` are the only cached values on Device. They are written only by lifecycle services, and the full history behind them lives in the related tables.
+- `status` and `current_condition` are the only cached values on Device. They are written only by lifecycle services (`devices.services`), and the full history behind them lives in the related tables.
+- **(Decision)** `recovery_reference` and `recovery_date` are captured at registration so devices can be filtered by recovery date before the Recovery module exists. The Recovery module will keep them in step with its records.
 
-### DeviceStatusChange (lifecycle history)
+### DeviceStatusChange (lifecycle history, append-only)
 | Field | Type | Notes |
 |---|---|---|
-| device | FK → Device | indexed |
-| from_status | enum, nullable | Null for the first entry |
+| device | FK → Device, `PROTECT` | indexed |
+| from_status | enum, nullable | Null for the registration entry |
 | to_status | enum | |
-| changed_by | FK → User | |
+| changed_by | FK → User, `PROTECT` | |
 | reason | varchar(255) | |
-| source_type / source_id | varchar / bigint, nullable | The record that caused it (e.g. `assessment`, 12) |
-| created_at | timestamptz | |
+| source_type / source_id | varchar / bigint, nullable | The record that caused it (e.g. `recovery`, 12); `device_registration` for the first entry |
+| changed_at | timestamptz | indexed |
 
-Used for the device history timeline and average lifecycle duration (first entry → `REALLOCATED`/`RESOLD`).
+A PostgreSQL trigger rejects `UPDATE` and `DELETE`. Used for the device history timeline and average lifecycle duration (first entry → `REALLOCATED`/`RESOLD`).
 
 ### Attachment
 | Field | Type | Notes |
 |---|---|---|
-| device | FK → Device | Every file belongs to a device |
-| content_type / object_id | FK → django_content_type / bigint, nullable | Optional link to a Recovery, Assessment, Work Order or Disposition |
-| file | file path | Random name under `MEDIA_ROOT` |
-| original_name | varchar(255) | |
-| mime_type | varchar(50) | Validated: JPEG, PNG, WebP, PDF |
+| device | FK → Device, `PROTECT` | Every file belongs to a device |
+| file | file path | `attachments/YYYY/MM/<uuid4>.<ext>` under `MEDIA_ROOT`; never returned by the API |
+| original_name | varchar(255) | Base name only, sanitised |
+| mime_type | varchar(50) | Detected from the file signature: JPEG, PNG, WebP, PDF |
 | size_bytes | int | ≤ `MAX_UPLOAD_SIZE_MB` |
+| description | varchar(255) | Optional |
 | uploaded_by | FK → User | |
 | created_at | timestamptz | |
+
+A link from an attachment to a Recovery, Assessment, Work Order or Disposition (`content_type` / `object_id`) is added with those modules.
 
 ---
 
@@ -266,13 +278,13 @@ Unique on (`recommendation`, `user`).
 | user_agent | varchar(255) | |
 | created_at | timestamptz | indexed |
 
-No `updated_at`. No update or delete through the API or admin.
+No `updated_at`. No update or delete through the API or admin; a PostgreSQL trigger rejects `UPDATE`/`DELETE` except the `ON DELETE SET NULL` of `user`.
 
 ---
 
 ## Indexes and constraints (summary)
 
-- Unique: `user.email`, `user.employee_id`, `device.device_code`, `device.serial_number`, `device.imei` (when not null), `work_order_number`, `role.code`, `permission.code`, (`reference_price.make`, `model`), (`ai_feedback.recommendation`, `user`).
+- Unique: `user.email`, `user.employee_id`, `device.device_code`, `device.serial_number` (when not null), `device.imei` (when not null), `work_order_number`, `role.code`, `permission.code`, (`reference_price.make`, `model`), (`ai_feedback.recommendation`, `user`).
 - Partial unique: one open work order per device; one confirmed disposition per device.
 - Check: non-negative costs and prices, confidence 0–100, `override_justification` non-empty when `decision = OVERRIDDEN`, channel valid for decision type.
 - Indexes on status, make/model, created_at, and the foreign keys used for filtering.

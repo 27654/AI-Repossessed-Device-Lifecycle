@@ -122,3 +122,129 @@ export function errorMessage(err: unknown, fallback = 'Something went wrong. Ple
   }
   return err.message || fallback
 }
+
+// Field errors from a DRF 400 body, first message per field.
+export function fieldErrors(err: unknown): Record<string, string> {
+  if (!(err instanceof ApiError) || err.status !== 400 || !err.data || typeof err.data !== 'object') return {}
+  const errors: Record<string, string> = {}
+  for (const [field, value] of Object.entries(err.data as Record<string, unknown>)) {
+    if (Array.isArray(value) && typeof value[0] === 'string') errors[field] = value[0]
+    else if (typeof value === 'string') errors[field] = value
+  }
+  return errors
+}
+
+// --- Devices ---
+
+export interface Paginated<T> {
+  count: number
+  next: string | null
+  previous: string | null
+  results: T[]
+}
+
+export interface UserLabel {
+  id: number
+  full_name: string
+}
+
+export interface DeviceSummary {
+  id: number
+  device_code: string
+  imei: string | null
+  serial_number: string | null
+  make: string
+  model: string
+  device_type: string
+  device_type_label: string
+  status: string
+  status_label: string
+  lifecycle_stage: string
+  current_condition: string | null
+  current_location: string
+  recovery_date: string | null
+  created_at: string
+}
+
+export interface Device extends DeviceSummary {
+  color: string
+  storage_capacity_gb: number | null
+  operating_system: string
+  condition_summary: string
+  recovery_reference: string
+  previous_owner_ref: string
+  notes: string
+  created_by: UserLabel
+  attachment_count: number
+  updated_at: string
+}
+
+// Fields a user may send when creating or editing a device.
+export interface DeviceInput {
+  imei: string
+  serial_number: string
+  make: string
+  model: string
+  device_type: string
+  color: string
+  storage_capacity_gb: number | null
+  operating_system: string
+  condition_summary: string
+  current_location: string
+  recovery_reference: string
+  recovery_date: string | null
+  previous_owner_ref: string
+  notes: string
+  initial_status?: string
+}
+
+export interface DeviceStatusChange {
+  id: number
+  from_status: string | null
+  from_status_label: string | null
+  to_status: string
+  to_status_label: string
+  changed_by: UserLabel
+  changed_at: string
+  reason: string
+  source_type: string
+  source_id: number | null
+}
+
+export interface Attachment {
+  id: number
+  original_name: string
+  mime_type: string
+  size_bytes: number
+  description: string
+  uploaded_by: UserLabel
+  created_at: string
+  download_url: string
+}
+
+export type DeviceFilters = Partial<
+  Record<'search' | 'status' | 'make' | 'device_type' | 'condition' | 'recovered_from' | 'recovered_to' | 'page', string>
+>
+
+function queryString(params: Record<string, string | undefined>): string {
+  const query = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) if (value) query.set(key, value)
+  const text = query.toString()
+  return text ? `?${text}` : ''
+}
+
+export const deviceApi = {
+  list: (filters: DeviceFilters) => apiRequest<Paginated<DeviceSummary>>(`/devices/${queryString(filters)}`),
+  get: (id: number) => apiRequest<Device>(`/devices/${id}/`),
+  create: (input: DeviceInput) => post<Device>('/devices/', input),
+  update: (id: number, input: Partial<DeviceInput>) =>
+    apiRequest<Device>(`/devices/${id}/`, { method: 'PATCH', body: JSON.stringify(input) }),
+  history: (id: number) => apiRequest<DeviceStatusChange[]>(`/devices/${id}/history/`),
+  attachments: (id: number) => apiRequest<Attachment[]>(`/devices/${id}/attachments/`),
+  uploadAttachment: (id: number, file: File, description: string) => {
+    const body = new FormData()
+    body.append('file', file)
+    body.append('description', description)
+    return apiRequest<Attachment>(`/devices/${id}/attachments/`, { method: 'POST', body })
+  },
+}

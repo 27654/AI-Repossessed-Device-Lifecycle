@@ -1,5 +1,9 @@
 from .models import AuditLog
 
+# Default for log_action(user=...): use the request's signed-in user. Passing
+# user=None explicitly records an anonymous actor instead.
+REQUEST_USER = object()
+
 
 def get_client_ip(request):
     """Client IP from the socket address.
@@ -22,7 +26,7 @@ def log_action(
     action,
     *,
     request=None,
-    user=None,
+    user=REQUEST_USER,
     user_label="",
     entity=None,
     entity_type="",
@@ -33,12 +37,13 @@ def log_action(
 ):
     """Write one audit log entry.
 
-    `user` defaults to the request's authenticated user. `entity` (a model
+    `user` defaults to the request's authenticated user; pass `user=None` for
+    an anonymous actor (e.g. a failed login). `entity` (a model
     instance) fills `entity_type` and `entity_id`. Never pass passwords, MFA
     secrets or session data in the value dictionaries.
     """
-    if user is None and request is not None and request.user.is_authenticated:
-        user = request.user
+    if user is REQUEST_USER:
+        user = request.user if request is not None and request.user.is_authenticated else None
     if entity is not None:
         entity_type = entity_type or entity._meta.model_name
         entity_id = entity_id or entity.pk

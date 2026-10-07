@@ -21,6 +21,7 @@ from .serializers import (
     AdminSetPasswordSerializer,
     ChangePasswordSerializer,
     CurrentUserSerializer,
+    LoginAttemptSerializer,
     LoginSerializer,
     MfaCodeSerializer,
     MfaDisableSerializer,
@@ -161,7 +162,14 @@ def mfa_confirm(request):
     user.mfa_enabled = True
     user.mfa_last_used_step = step
     user.save(update_fields=["mfa_enabled", "mfa_last_used_step", "updated_at"])
-    log_action(AuditAction.MFA_ENABLED, request=request, entity=user, description="MFA enabled.")
+    log_action(
+        AuditAction.MFA_ENABLED,
+        request=request,
+        entity=user,
+        description="MFA enabled.",
+        previous_values={"mfa_enabled": False},
+        new_values={"mfa_enabled": True},
+    )
     return Response(CurrentUserSerializer(user).data)
 
 
@@ -182,7 +190,14 @@ def mfa_disable(request):
     user.mfa_secret = ""
     user.mfa_last_used_step = None
     user.save(update_fields=["mfa_enabled", "mfa_secret", "mfa_last_used_step", "updated_at"])
-    log_action(AuditAction.MFA_DISABLED, request=request, entity=user, description="MFA disabled by the user.")
+    log_action(
+        AuditAction.MFA_DISABLED,
+        request=request,
+        entity=user,
+        description="MFA disabled by the user.",
+        previous_values={"mfa_enabled": True},
+        new_values={"mfa_enabled": False},
+    )
     return Response(CurrentUserSerializer(user).data)
 
 
@@ -267,12 +282,61 @@ def user_reset_password(request, pk):
 def user_reset_mfa(request, pk):
     """Administrator removes MFA, e.g. when a user loses their phone."""
     user = get_object_or_404(User, pk=pk)
+    was_enabled = user.mfa_enabled
     user.mfa_enabled = False
     user.mfa_secret = ""
     user.mfa_last_used_step = None
     user.save(update_fields=["mfa_enabled", "mfa_secret", "mfa_last_used_step", "updated_at"])
-    log_action(AuditAction.MFA_DISABLED, request=request, entity=user, description=f"MFA reset for {user.email} by administrator.")
+    log_action(
+        AuditAction.MFA_DISABLED,
+        request=request,
+        entity=user,
+        description=f"MFA reset for {user.email} by administrator.",
+        previous_values={"mfa_enabled": was_enabled},
+        new_values={"mfa_enabled": False},
+    )
     return Response(UserSerializer(user).data)
+
+
+@api_view(["POST"])
+@permission_classes([require_permission(Perm.USER_MANAGE)])
+def user_unlock(request, pk):
+    """Administrator lifts a failed-login lockout before it expires."""
+    user = get_object_or_404(User, pk=pk)
+    previous = {
+        "locked_until": user.locked_until.isoformat() if user.locked_until else None,
+        "failed_login_count": user.failed_login_count,
+    }
+    user.locked_until = None
+    user.failed_login_count = 0
+    user.save(update_fields=["locked_until", "failed_login_count", "updated_at"])
+    log_action(
+        AuditAction.ACCOUNT_UNLOCKED,
+        request=request,
+        entity=user,
+        description=f"Account {user.email} unlocked by administrator.",
+        previous_values=previous,
+        new_values={"locked_until": None, "failed_login_count": 0},
+    )
+    return Response(UserSerializer(user).data)
+
+
+class LoginAttemptListView(generics.ListAPIView):
+    """Login history for security monitoring. Filters: email, user, success (true/false)."""
+
+    permission_classes = [require_permission(Perm.AUDIT_VIEW)]
+    serializer_class = LoginAttemptSerializer
+
+    def get_queryset(self):
+        qs = LoginAttempt.objects.all()
+        params = self.request.query_params
+        if params.get("email"):
+            qs = qs.filter(email_attempted__iexact=params["email"].strip())
+        if params.get("user", "").isdigit():
+            qs = qs.filter(user_id=params["user"])
+        if params.get("success") in ("true", "false"):
+            qs = qs.filter(success=params["success"] == "true")
+        return qs
 
 
 class RoleListView(generics.ListAPIView):
@@ -295,6 +359,7 @@ class RoleDetailView(generics.RetrieveUpdateAPIView):
     def perform_update(self, serializer):
         role = serializer.instance
         before = sorted(role.permissions.values_list("code", flat=True))
+        before_details = {f: getattr(role, f) for f in ("name", "description")}
         if role.code == RoleCode.SYSTEM_ADMIN and "permissions" in serializer.validated_data:
             new_codes = {p.code for p in serializer.validated_data["permissions"]}
             if not self.PROTECTED_ADMIN_PERMISSIONS <= new_codes:
@@ -302,6 +367,16 @@ class RoleDetailView(generics.RetrieveUpdateAPIView):
 
         role = serializer.save()
         after = sorted(role.permissions.values_list("code", flat=True))
+        changed = [f for f in before_details if getattr(role, f) != before_details[f]]
+        if changed:
+            log_action(
+                AuditAction.ROLE_UPDATED,
+                request=self.request,
+                entity=role,
+                description=f"Updated {', '.join(changed)} of role {role.code}.",
+                previous_values={f: before_details[f] for f in changed},
+                new_values={f: getattr(role, f) for f in changed},
+            )
         if before != after:
             log_action(
                 AuditAction.ROLE_PERMISSIONS_CHANGED,

@@ -3,7 +3,7 @@
 Final-year academic prototype for **Yellow (Rwanda)**. It tracks repossessed devices through
 **Recovery → Condition Assessment → Refurbishment → Reallocation/Resale**, with role-based access control, a full audit trail, and transparent rule-based AI decision support. The AI only recommends; humans decide.
 
-> **Status:** project scaffold. Business modules are added phase by phase. See [docs/architecture.md](docs/architecture.md).
+> **Status:** authentication, RBAC, audit and device management are implemented. The remaining lifecycle modules are added phase by phase. See [docs/architecture.md](docs/architecture.md).
 
 ## Tech stack
 
@@ -128,5 +128,7 @@ cd frontend && npm run lint                      # lint
 - Secrets live only in `.env`, which is git-ignored. Never commit it.
 - Every API endpoint requires login by default (401 if not signed in, 403 if the role lacks the permission). Role permissions are enforced on the backend, not just hidden in the UI.
 - TOTP secrets are encrypted at rest (`MFA_ENCRYPTION_KEY`, see `.env.example`).
+- Device photos and documents are stored under `backend/media/` (git-ignored, `MEDIA_ROOT`) with random names and are downloadable only through the API by users with `device.view`. Only JPEG, PNG, WebP and PDF up to 5 MB are accepted.
+- Previous device owners are recorded only as a pseudonymous Yellow account reference, never by name or ID number.
 - The Django admin (`/admin/`) uses password-only login without MFA or audit, so it is mounted only when `DJANGO_DEBUG=true`.
 - The AI component is a **prototype rule-based decision-support engine**, not a trained machine-learning model. Its recommendations never change a device's status on their own.

@@ -103,7 +103,8 @@ class MfaEnrolmentTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["mfa_enabled"])
-        self.assertTrue(AuditLog.objects.filter(action=AuditAction.MFA_ENABLED, user=self.user).exists())
+        entry = AuditLog.objects.get(action=AuditAction.MFA_ENABLED, user=self.user)
+        self.assertEqual(entry.new_values, {"mfa_enabled": True})
 
     def test_secret_is_encrypted_at_rest_and_never_returned(self):
         secret = self.client.post(reverse("auth-mfa-setup")).json()["secret"]

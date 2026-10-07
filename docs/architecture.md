@@ -26,7 +26,7 @@ flowchart LR
 | Database | PostgreSQL 16 | Relational system of record. |
 | File storage | Local filesystem (`MEDIA_ROOT`) | Evidence photos and documents. |
 
-In development, Vite proxies `/api` and `/media` to Django, so the browser sees one origin. CORS (`django-cors-headers`) is also configured for direct cross-origin access.
+In development, Vite proxies `/api` to Django, so the browser sees one origin. Uploaded files are never served from a public `/media/` URL; they download through an authenticated API endpoint. CORS (`django-cors-headers`) is also configured for direct cross-origin access.
 
 ### Backend layout
 
@@ -191,13 +191,23 @@ stateDiagram-v2
 | `REALLOCATED`, `RESOLD` | Closed |
 | `UNABLE_TO_REPAIR` | Exception (closed) |
 
-**Rules enforced in `transition_device`:**
+**Registration.** `devices.services.register_device` creates a device in `IN_RECOVERY` (recovery under way) or `RECOVERED` (already in hand) and writes the first `DeviceStatusChange` (from: none). The status cannot be set or edited through the device API.
 
-- Only the transitions above are allowed. Anything else returns **400** with a reason.
+**Rules enforced in `transition_device`** (implemented in the Device Management phase):
+
+- Only the transitions above are allowed; unknown statuses and anything else raise `InvalidTransition`, which a view returns as **400** with a reason.
+- The device row is locked (`SELECT … FOR UPDATE`), and the status update, `DeviceStatusChange` row (from, to, who, when, reason, source type/id) and `AuditLog` entry are written in one transaction.
+- A signed-in, active staff member must be the actor, and `source_type` `ai_recommendation`/`ai_engine` is refused: **AI never changes a device's status.**
+- `DeviceStatusChange` is append-only: model guards plus a PostgreSQL trigger reject `UPDATE`/`DELETE`, and devices with history cannot be deleted (`PROTECT`).
+
+Added by later lifecycle phases (not yet enforced):
+
 - A device cannot reach `READY_FOR_DISPOSITION` unless it has a submitted assessment, plus a completed work order if that assessment recommended refurbishment.
 - A device cannot be disposed of unless it is `READY_FOR_DISPOSITION`, and it can have only one confirmed disposition.
-- Every transition writes a `DeviceStatusChange` row (from, to, who, when, reason, triggering record) and an `AuditLog` entry.
-- **AI never calls `transition_device`.** Only human actions move a device.
+
+**Device identification.** Each device gets a `device_code` (`YRW-<year>-<number>`) from a PostgreSQL sequence, so concurrent registrations never collide. A device needs an IMEI (15 digits, Luhn-checked) or a serial number (stored upper-case, compared case-insensitively); both are unique when present. The previous owner is stored only as a pseudonymous Yellow account reference (letters, digits, `-_/`, no spaces), which keeps names and national IDs out.
+
+**Device API permissions.** `device.view`: list, detail, history, attachment list and download. `device.create`: register. `device.update`: edit and upload attachments.
 
 **Exception states (Decision).** *Damaged* and *non-functional* are recorded as assessment findings (functionality, physical condition, damage notes) and reflected in the device's current condition. They lead to either refurbishment or `UNABLE_TO_REPAIR`, so they don't need separate statuses. `UNABLE_TO_REPAIR` is terminal in this prototype.
 
@@ -229,13 +239,13 @@ A **transparent, rule-based prototype decision-support engine**. No machine-lear
 
 ## 8. Audit
 
-- `AuditLog` is **append-only**. No API updates or deletes it, and the Django admin shows it read-only.
-- Entries are written by `audit.services.log_action(...)` from inside the same service transaction as the change, so an action and its audit record succeed or fail together. Login, logout and failed logins are logged from the auth views.
+- `AuditLog` is **append-only**. No API updates or deletes it, the Django admin shows it read-only, the model and queryset refuse changes, and a PostgreSQL trigger (`audit` migration 0002) rejects `UPDATE`/`DELETE` from any client. The only allowed update is `ON DELETE SET NULL` of the user link; `user_label` keeps the email.
+- Entries are written by `audit.services.log_action(...)` from inside the same service transaction as the change, so an action and its audit record succeed or fail together. Login, logout, failed logins and lockouts are logged by `accounts.services` and the auth views. Login attempts are also listed at `GET /api/login-attempts/` (`audit.view`).
 - Each entry records: user, action, entity type, entity ID, timestamp, previous values and new values (JSON, changed fields only), IP address, user agent, and a short description.
 - Passwords, MFA secrets and session data are never written to the log.
 - Admins browse it at `/admin/audit-log` with filters for user, action, entity, entity ID and date range.
 
-Audited actions: login / logout / failed login / lockout, user and role changes, device created / updated / status changed, recovery recorded / updated, assessment created / modified, work order created / updated / completed, AI recommendation generated / accepted / overridden, feedback given, disposition recorded / confirmed, attachment uploaded, reference price changed.
+Audited actions: login / logout / failed login / lockout / unlock / session expiry, password change / reset, MFA setup / enable / disable / verify / failure, user and role changes, device created / updated / status changed, recovery recorded / updated, assessment created / modified, work order created / updated / completed, AI recommendation generated / accepted / overridden, feedback given, disposition recorded / confirmed, attachment uploaded, reference price changed.
 
 ## 9. API structure
 
@@ -245,8 +255,8 @@ REST, JSON, all under `/api/`. Lists are paginated (`?page=`, 20 per page) and a
 |---|---|
 | Health | `GET /api/health/` |
 | Auth | `GET /api/auth/csrf/` · `POST /api/auth/login/` · `POST /api/auth/mfa/verify/` · `POST /api/auth/logout/` · `GET/PATCH /api/auth/me/` · `POST /api/auth/change-password/` · `POST /api/auth/mfa/setup/`, `/mfa/confirm/`, `/mfa/disable/` |
-| Users & roles | `GET/POST /api/users/` · `GET/PATCH /api/users/{id}/` · `POST /api/users/{id}/reset-password/` · `POST /api/users/{id}/reset-mfa/` · `GET /api/roles/` · `PATCH /api/roles/{id}/` · `GET /api/permissions/` · `GET /api/login-attempts/` |
-| Devices | `GET/POST /api/devices/` (`?search=&status=&make=&condition=&recovered_from=&recovered_to=`) · `GET/PATCH /api/devices/{id}/` · `GET /api/devices/{id}/history/` · `GET/POST /api/devices/{id}/attachments/` |
+| Users & roles | `GET/POST /api/users/` · `GET/PATCH /api/users/{id}/` · `POST /api/users/{id}/reset-password/` · `POST /api/users/{id}/reset-mfa/` · `POST /api/users/{id}/unlock/` · `GET /api/roles/` · `PATCH /api/roles/{id}/` · `GET /api/permissions/` · `GET /api/login-attempts/` |
+| Devices | `GET/POST /api/devices/` (`?search=&status=&make=&model=&device_type=&condition=&recovered_from=&recovered_to=&page=`) · `GET/PATCH /api/devices/{id}/` · `GET /api/devices/{id}/history/` · `GET/POST /api/devices/{id}/attachments/` · `GET /api/devices/{id}/attachments/{attachment_id}/download/` |
 | Recovery | `GET/POST /api/recoveries/` · `GET/PATCH /api/recoveries/{id}/` (status: Initiated → In Transit → Received) |
 | Assessments | `GET/POST /api/assessments/` · `GET/PATCH /api/assessments/{id}/` |
 | Refurbishment | `GET/POST /api/work-orders/` · `GET/PATCH /api/work-orders/{id}/` · `POST /api/work-orders/{id}/steps/` · `POST /api/work-orders/{id}/items/` · `POST /api/work-orders/{id}/complete/` · `POST /api/work-orders/{id}/unable-to-repair/` |
@@ -263,7 +273,7 @@ REST, JSON, all under `/api/`. Lists are paginated (`?page=`, 20 per page) and a
 | Currency | All money is stored as whole RWF (`BIGINT`). RWF has no minor unit in practice. |
 | Time zone | `Africa/Kigali`. Timestamps are stored in UTC. |
 | Notifications | In-app only, stored in the database. The frontend polls the unread count every 30 s. No WebSockets, email or SMS. |
-| Uploads | JPEG/PNG/WebP/PDF only, checked by extension and file signature. 5 MB maximum (`MAX_UPLOAD_SIZE_MB`). Stored under random file names. |
+| Uploads | JPEG/PNG/WebP/PDF only, detected from the file signature (the browser's Content-Type is ignored) and matched against the extension. 5 MB maximum (`MAX_UPLOAD_SIZE_MB`). Stored as `attachments/YYYY/MM/<random>.<ext>`; the path is never returned. Downloads go through `GET /api/devices/{id}/attachments/{attachment_id}/download/` (`device.view`), served inline with `Content-Security-Policy: sandbox`. |
 | Previous owner | Stored only as a pseudonymous customer reference (e.g. a Yellow account number), never name or national ID. |
 | Report export | CSV export of analytics tables. PDF only if time allows. |
 | Secrets | Only in environment variables (`.env`, git-ignored). `.env.example` documents them. |

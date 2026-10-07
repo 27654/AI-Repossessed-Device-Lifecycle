@@ -9,6 +9,7 @@ class AuditAction(models.TextChoices):
     LOGIN = "LOGIN", "Login"
     LOGIN_FAILED = "LOGIN_FAILED", "Failed login"
     ACCOUNT_LOCKED = "ACCOUNT_LOCKED", "Account locked"
+    ACCOUNT_UNLOCKED = "ACCOUNT_UNLOCKED", "Account unlocked"
     LOGOUT = "LOGOUT", "Logout"
     SESSION_EXPIRED = "SESSION_EXPIRED", "Session expired"
     PASSWORD_CHANGED = "PASSWORD_CHANGED", "Password changed"
@@ -23,10 +24,29 @@ class AuditAction(models.TextChoices):
     USER_UPDATED = "USER_UPDATED", "User updated"
     USER_ROLE_CHANGED = "USER_ROLE_CHANGED", "User role changed"
     ROLE_PERMISSIONS_CHANGED = "ROLE_PERMISSIONS_CHANGED", "Role permissions changed"
+    ROLE_UPDATED = "ROLE_UPDATED", "Role details updated"
+    DEVICE_CREATED = "DEVICE_CREATED", "Device created"
+    DEVICE_UPDATED = "DEVICE_UPDATED", "Device updated"
+    DEVICE_STATUS_CHANGED = "DEVICE_STATUS_CHANGED", "Device status changed"
+    ATTACHMENT_UPLOADED = "ATTACHMENT_UPLOADED", "Attachment uploaded"
+
+
+class AuditLogQuerySet(models.QuerySet):
+    """Blocks bulk changes. The database trigger (migration 0002) blocks everything else."""
+
+    def update(self, **kwargs):
+        raise PermissionDenied("Audit log entries cannot be modified.")
+
+    def delete(self):
+        raise PermissionDenied("Audit log entries cannot be deleted.")
 
 
 class AuditLog(models.Model):
-    """Append-only record of an important action. Written through audit.services.log_action."""
+    """Append-only record of an important action. Written through audit.services.log_action.
+
+    Append-only is enforced three ways: this model, its queryset, and a
+    PostgreSQL trigger that rejects UPDATE and DELETE from any client.
+    """
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="audit_logs"
@@ -41,6 +61,8 @@ class AuditLog(models.Model):
     ip_address = models.GenericIPAddressField(null=True, blank=True)
     user_agent = models.CharField(max_length=255, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    objects = AuditLogQuerySet.as_manager()
 
     class Meta:
         ordering = ["-created_at", "-id"]
