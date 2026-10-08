@@ -225,6 +225,8 @@ export interface Attachment {
   recovery_reference: string | null
   assessment: number | null
   assessment_reference: string | null
+  refurbishment: number | null
+  refurbishment_reference: string | null
 }
 
 export type DeviceFilters = Partial<
@@ -439,4 +441,117 @@ export const aiApi = {
     post<AIRecommendation>(`/assessments/${assessmentId}/decision/`, { final_decision, reason }),
   feedback: (assessmentId: number, verdict: AIFeedback['verdict'], comment: string) =>
     post<AIFeedback>(`/assessments/${assessmentId}/ai-feedback/`, { verdict, comment }),
+}
+
+// --- Refurbishment ---
+
+export type WorkOrderStatus = 'OPEN' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED'
+export type StepStatus = 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'SKIPPED'
+
+export interface RefurbishmentStep {
+  id: number
+  work_order: number
+  step_type: string
+  step_type_label: string
+  description: string
+  status: StepStatus
+  status_label: string
+  performed_by: UserLabel | null
+  started_at: string | null
+  completed_at: string | null
+  notes: string
+  created_at: string
+  updated_at: string
+}
+
+export interface RefurbishmentItem {
+  id: number
+  work_order: number
+  item_name: string
+  part_number: string
+  quantity: number
+  unit_cost_rwf: number
+  total_cost_rwf: number
+  supplier: string
+  notes: string
+  created_by: UserLabel
+  created_at: string
+  updated_at: string
+}
+
+export interface WorkOrder {
+  id: number
+  reference: string
+  device: number
+  device_summary: DeviceLabel
+  assigned_to: UserLabel | null
+  created_by: UserLabel
+  status: WorkOrderStatus
+  status_label: string
+  outcome: '' | 'REPAIRED' | 'UNABLE_TO_REPAIR'
+  outcome_label: string | null
+  diagnosis: string
+  work_summary: string
+  estimated_cost_rwf: number
+  labour_cost_rwf: number | null
+  parts_cost_rwf: number
+  total_cost_rwf: number
+  actual_cost_rwf: number | null
+  closure_reason: string
+  started_at: string | null
+  completed_at: string | null
+  completed_by: UserLabel | null
+  steps: RefurbishmentStep[]
+  items: RefurbishmentItem[]
+  attachments: Attachment[]
+  created_at: string
+  updated_at: string
+}
+
+// Planning fields of an active work order.
+export interface WorkOrderInput {
+  assigned_to: number | null
+  diagnosis: string
+  estimated_cost_rwf: number
+  work_summary?: string
+  labour_cost_rwf?: number | null
+}
+
+export interface ItemInput {
+  item_name: string
+  part_number: string
+  quantity: number
+  unit_cost_rwf: number
+  supplier: string
+  notes: string
+}
+
+export type WorkOrderFilters = Partial<Record<'device' | 'status' | 'assigned_to' | 'search' | 'page', string>>
+
+const patch = <T>(path: string, body: unknown) =>
+  apiRequest<T>(path, { method: 'PATCH', body: JSON.stringify(body) })
+
+export const refurbishmentApi = {
+  list: (filters: WorkOrderFilters) => apiRequest<Paginated<WorkOrder>>(`/refurbishments/${queryString(filters)}`),
+  get: (id: number) => apiRequest<WorkOrder>(`/refurbishments/${id}/`),
+  technicians: () => apiRequest<UserLabel[]>('/refurbishments/technicians/'),
+  create: (device: number, input: WorkOrderInput) => post<WorkOrder>('/refurbishments/', { device, ...input }),
+  update: (id: number, input: Partial<WorkOrderInput>) => patch<WorkOrder>(`/refurbishments/${id}/`, input),
+  start: (id: number) => post<WorkOrder>(`/refurbishments/${id}/start/`),
+  complete: (id: number, work_summary: string, labour_cost_rwf: number) =>
+    post<WorkOrder>(`/refurbishments/${id}/complete/`, { work_summary, labour_cost_rwf }),
+  unableToRepair: (id: number, reason: string) => post<WorkOrder>(`/refurbishments/${id}/unable-to-repair/`, { reason }),
+  cancel: (id: number, reason: string) => post<WorkOrder>(`/refurbishments/${id}/cancel/`, { reason }),
+  addStep: (id: number, step_type: string, description: string) =>
+    post<RefurbishmentStep>(`/refurbishments/${id}/steps/`, { step_type, description }),
+  updateStep: (stepId: number, input: Partial<Pick<RefurbishmentStep, 'status' | 'description' | 'notes'>>) =>
+    patch<RefurbishmentStep>(`/refurbishment-steps/${stepId}/`, input),
+  addItem: (id: number, input: ItemInput) => post<RefurbishmentItem>(`/refurbishments/${id}/items/`, input),
+  updateItem: (itemId: number, input: Partial<ItemInput>) => patch<RefurbishmentItem>(`/refurbishment-items/${itemId}/`, input),
+  uploadEvidence: (id: number, file: File, description: string) => {
+    const body = new FormData()
+    body.append('file', file)
+    body.append('description', description)
+    return apiRequest<Attachment>(`/refurbishments/${id}/attachments/`, { method: 'POST', body })
+  },
 }

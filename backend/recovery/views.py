@@ -21,7 +21,7 @@ SEARCH_FIELDS = ["reference", "device__device_code", "device__imei", "device__se
 
 def recovery_queryset():
     return Recovery.objects.select_related("device", "recovery_officer", "completed_by").prefetch_related(
-        Prefetch("attachments", queryset=Attachment.objects.select_related("uploaded_by", "recovery", "assessment"))
+        Prefetch("attachments", queryset=Attachment.objects.select_related("uploaded_by", "recovery", "assessment", "refurbishment"))
     )
 
 
@@ -98,7 +98,7 @@ class RecoveryAttachmentListCreateView(generics.ListCreateAPIView):
         return get_object_or_404(Recovery.objects.select_related("device"), pk=self.kwargs["pk"])
 
     def get_queryset(self):
-        return self.get_recovery().attachments.select_related("uploaded_by", "recovery", "assessment")
+        return self.get_recovery().attachments.select_related("uploaded_by", "recovery", "assessment", "refurbishment")
 
     def perform_create(self, serializer):
         recovery = self.get_recovery()

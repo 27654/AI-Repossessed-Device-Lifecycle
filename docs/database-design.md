@@ -107,6 +107,7 @@ A PostgreSQL trigger rejects `UPDATE` and `DELETE`. Used for the device history 
 | device | FK → Device, `PROTECT` | Every file belongs to a device |
 | recovery | FK → Recovery, nullable, `PROTECT` | Set when the file is evidence for a recovery (same device, checked in the service) |
 | assessment | FK → Assessment, nullable, `PROTECT` | Set when the file is evidence for an assessment (same device, checked in the service) |
+| refurbishment | FK → RefurbishmentWorkOrder, nullable, `PROTECT` | Set when the file is evidence for a work order (same device, checked in the service) |
 | file | file path | `attachments/YYYY/MM/<uuid4>.<ext>` under `MEDIA_ROOT`; never returned by the API |
 | original_name | varchar(255) | Base name only, sanitised |
 | mime_type | varchar(50) | Detected from the file signature: JPEG, PNG, WebP, PDF |
@@ -115,7 +116,7 @@ A PostgreSQL trigger rejects `UPDATE` and `DELETE`. Used for the device history 
 | uploaded_by | FK → User | |
 | created_at | timestamptz | |
 
-**(Decision)** A lifecycle record links its evidence through a nullable foreign key on Attachment, one per module (`recovery`, `assessment`; work order and disposition when those modules are built). A CHECK constraint allows at most one of these links per file. This replaces the earlier generic `content_type` / `object_id` idea: real foreign keys give referential integrity and simple queries. All files keep the same upload checks, storage and authenticated download.
+**(Decision)** A lifecycle record links its evidence through a nullable foreign key on Attachment, one per module (`recovery`, `assessment`, `refurbishment`; disposition when that module is built). A CHECK constraint (`attachment_single_lifecycle_link_v2`) allows at most one of these links per file. This replaces the earlier generic `content_type` / `object_id` idea: real foreign keys give referential integrity and simple queries. All files keep the same upload checks, storage and authenticated download.
 
 ---
 
@@ -182,38 +183,63 @@ Evidence: Attachment rows with `assessment` set (uploads allowed while Draft; fi
 
 **(Decision)** The device's 4-level `current_condition` is set on submission from `physical_condition` (`CRITICAL` → `POOR`). There is no separate "overall rating" field; the final route (refurbish / ready / unable to repair) is the human decision recorded on `AIRecommendation`.
 
-### RefurbishmentWorkOrder
+### RefurbishmentWorkOrder (Phase 7)
 | Field | Type | Notes |
 |---|---|---|
-| work_order_number | varchar(20), unique | e.g. `WO-2026-0007`, generated |
-| device | FK → Device | |
-| assessment | FK → ConditionAssessment | The assessment that justified the work |
-| assigned_technician | FK → User | Must have the Refurbishment Staff role |
-| description | text | |
-| labour_cost | bigint (RWF) | default 0 |
-| status | enum | `PENDING`, `IN_PROGRESS`, `COMPLETED`, `UNABLE_TO_REPAIR` |
-| started_at / completed_at | timestamptz, nullable | |
-| technician_notes | text | |
+| reference | varchar(20), unique | `REF-<year>-<number>`, from the `refurbishment_workorder_reference_seq` sequence |
+| device | FK → Device, `PROTECT` | Device must be `REFURBISHING` when the work order is created |
+| assigned_to | FK → User, nullable | An active user with `refurbishment.manage` (checked in the service); set to the starter if empty |
 | created_by | FK → User | |
+| status | enum | `OPEN`, `IN_PROGRESS`, `COMPLETED`, `CANCELLED`; indexed |
+| outcome | enum, blank unless completed | `REPAIRED`, `UNABLE_TO_REPAIR` |
+| diagnosis / work_summary | text | Summary required to complete as repaired |
+| estimated_cost_rwf | bigint (whole RWF) | ≥ 0, default 0 |
+| labour_cost_rwf | bigint (whole RWF), nullable | Required to complete as repaired (0 allowed) |
+| actual_cost_rwf | bigint (whole RWF), nullable | **(Decision)** calculated at closure = sum of item totals + labour, then frozen; never typed in |
+| closure_reason | text | Required for `UNABLE_TO_REPAIR` and `CANCELLED` |
+| started_at / completed_at | timestamptz, nullable | `completed_at ≥ started_at` (CHECK); `completed_at` is also the cancellation time |
+| completed_by | FK → User, nullable | Who completed or cancelled |
+| created_at / updated_at | timestamptz | |
 
-Total cost = `labour_cost` + sum of item costs (computed, not stored). At most one open (`PENDING`/`IN_PROGRESS`) work order per device, enforced by a partial unique index.
+Constraints:
+- At most one active (`OPEN`/`IN_PROGRESS`) work order per device (partial unique index). Cancelled and completed ones are kept as history.
+- CHECK: only `COMPLETED` has an outcome, and then it has `actual_cost_rwf`, `completed_at` and `completed_by`; `UNABLE_TO_REPAIR`/`CANCELLED` have a reason; `REPAIRED` has a work summary and labour cost.
+- A PostgreSQL trigger rejects `UPDATE` of a completed or cancelled work order and `DELETE` of any work order.
 
-### RefurbishmentStep
+**(Decision)** `CANCELLED` closes a work order opened in error and leaves the device `REFURBISHING`; it does not change the lifecycle.
+
+### RefurbishmentStep (Phase 7)
 | Field | Type | Notes |
 |---|---|---|
-| work_order | FK → RefurbishmentWorkOrder | |
-| step_type | enum | `CLEANING`, `PARTS_REPLACEMENT`, `SOFTWARE_RESET`, `TESTING`, `OTHER` |
+| work_order | FK → RefurbishmentWorkOrder, `PROTECT` | |
+| step_type | enum | `DIAGNOSIS`, `CLEANING`, `SCREEN_REPAIR`, `BATTERY_REPLACEMENT`, `SOFTWARE_RESET`, `SOFTWARE_REPAIR`, `HOUSING_REPAIR`, `PORT_REPAIR`, `FUNCTIONAL_TEST`, `QUALITY_CHECK`, `OTHER` |
+| description | varchar(255) | |
+| status | enum | `PENDING` → `IN_PROGRESS` → `COMPLETED`, or → `SKIPPED` (final states) |
+| performed_by | FK → User, nullable | Who last moved the step |
+| started_at / completed_at | timestamptz, nullable | Set by the server; CHECK ties them to the status (`PENDING`: none; `IN_PROGRESS`: started; `COMPLETED`: both, completed ≥ started, with performer; `SKIPPED`: completed) |
+| notes | text | Required when `SKIPPED` (the reason; CHECK) |
+| created_at / updated_at | timestamptz | |
+
+A PostgreSQL trigger rejects changes to finished (`COMPLETED`/`SKIPPED`) steps, to any step of a closed work order, and all deletes.
+
+**(Decision)** Every step on a work order must be completed or skipped before completion, and `FUNCTIONAL_TEST` and `QUALITY_CHECK` must each be completed at least once (they cannot be satisfied by skipping).
+
+### RefurbishmentItem (Phase 7, parts/materials)
+| Field | Type | Notes |
+|---|---|---|
+| work_order | FK → RefurbishmentWorkOrder, `PROTECT` | |
+| item_name | varchar(120) | e.g. "Replacement screen" |
+| part_number / supplier | varchar, blank allowed | Free text; no supplier integration |
+| quantity | positive int | > 0 (CHECK), at most 1,000 via the API |
+| unit_cost_rwf | bigint (whole RWF) | ≥ 0, at most 100,000,000 via the API |
+| total_cost_rwf | bigint (whole RWF) | Calculated by the server; CHECK `total_cost_rwf = quantity × unit_cost_rwf` |
 | notes | text | |
-| performed_by | FK → User | |
-| performed_at | timestamptz | |
+| created_by | FK → User | |
+| created_at / updated_at | timestamptz | |
 
-### RefurbishmentItem (parts/materials)
-| Field | Type | Notes |
-|---|---|---|
-| work_order | FK → RefurbishmentWorkOrder | |
-| name | varchar(120) | e.g. "Replacement screen" |
-| quantity | positive int | |
-| unit_cost | bigint (RWF) | |
+A PostgreSQL trigger rejects changes to items of a closed work order and all deletes (a wrong entry is corrected by editing it while the work order is active).
+
+Evidence: Attachment rows with `refurbishment` set (uploads while the work order is active; files stay downloadable afterwards).
 
 ### Disposition
 | Field | Type | Notes |

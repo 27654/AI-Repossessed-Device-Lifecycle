@@ -211,22 +211,34 @@ def record_condition(device, condition, *, actor, source_reference, request=None
 
 @transaction.atomic
 def add_attachment(
-    device, *, actor, upload, mime_type, original_name, description="", recovery=None, assessment=None, request=None
+    device,
+    *,
+    actor,
+    upload,
+    mime_type,
+    original_name,
+    description="",
+    recovery=None,
+    assessment=None,
+    refurbishment=None,
+    request=None,
 ):
     """Store an already validated upload and audit it (file metadata only).
 
-    `recovery` or `assessment` optionally links the file as evidence for that
-    record, which must belong to the same device.
+    `recovery`, `assessment` or `refurbishment` (a work order) optionally links
+    the file as evidence for that record, which must belong to the same device.
     """
-    if recovery is not None and assessment is not None:
+    linked = [r for r in (recovery, assessment, refurbishment) if r is not None]
+    if len(linked) > 1:
         raise ValidationError({"detail": "A file can be evidence for one record only."})
-    record = recovery or assessment
+    record = linked[0] if linked else None
     if record is not None and record.device_id != device.pk:
         raise ValidationError({"detail": "Evidence must belong to the same device as its record."})
     attachment = Attachment(
         device=device,
         recovery=recovery,
         assessment=assessment,
+        refurbishment=refurbishment,
         original_name=original_name,
         mime_type=mime_type,
         size_bytes=upload.size,
@@ -249,6 +261,11 @@ def add_attachment(
             "size_bytes": attachment.size_bytes,
             **({"recovery_id": recovery.pk, "recovery_reference": recovery.reference} if recovery else {}),
             **({"assessment_id": assessment.pk, "assessment_reference": assessment.reference} if assessment else {}),
+            **(
+                {"work_order_id": refurbishment.pk, "work_order_reference": refurbishment.reference}
+                if refurbishment
+                else {}
+            ),
         },
     )
     return attachment

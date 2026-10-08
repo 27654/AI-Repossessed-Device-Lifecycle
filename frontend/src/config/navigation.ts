@@ -14,7 +14,7 @@ export const navItems: NavItem[] = [
   { label: 'Devices', path: '/devices', permission: Perm.DEVICE_VIEW },
   { label: 'Recovery', path: '/recovery', permission: Perm.RECOVERY_MANAGE },
   { label: 'Assessments', path: '/assessments', permission: Perm.ASSESSMENT_CREATE },
-  { label: 'Refurbishment', path: '/refurbishment', permission: Perm.REFURBISHMENT_MANAGE },
+  { label: 'Refurbishment', path: '/refurbishments', permission: Perm.REFURBISHMENT_MANAGE },
   { label: 'Dispositions', path: '/dispositions', permission: Perm.DISPOSITION_CREATE },
   { label: 'AI Recommendations', path: '/ai-recommendations', permission: Perm.AI_VIEW },
   { label: 'Analytics', path: '/analytics', permission: Perm.ANALYTICS_VIEW },

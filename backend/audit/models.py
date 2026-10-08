@@ -38,6 +38,16 @@ class AuditAction(models.TextChoices):
     AI_RECOMMENDATION_GENERATED = "AI_RECOMMENDATION_GENERATED", "AI recommendation generated"
     AI_FEEDBACK_RECORDED = "AI_FEEDBACK_RECORDED", "AI feedback recorded"
     AI_DECISION_MADE = "AI_DECISION_MADE", "Final decision on AI recommendation"
+    REFURBISHMENT_CREATED = "REFURBISHMENT_CREATED", "Work order created"
+    REFURBISHMENT_UPDATED = "REFURBISHMENT_UPDATED", "Work order updated"
+    REFURBISHMENT_STARTED = "REFURBISHMENT_STARTED", "Work order started"
+    REFURBISHMENT_STEP_CREATED = "REFURBISHMENT_STEP_CREATED", "Refurbishment step added"
+    REFURBISHMENT_STEP_UPDATED = "REFURBISHMENT_STEP_UPDATED", "Refurbishment step updated"
+    REFURBISHMENT_ITEM_CREATED = "REFURBISHMENT_ITEM_CREATED", "Refurbishment part added"
+    REFURBISHMENT_ITEM_UPDATED = "REFURBISHMENT_ITEM_UPDATED", "Refurbishment part updated"
+    REFURBISHMENT_COMPLETED = "REFURBISHMENT_COMPLETED", "Refurbishment completed"
+    REFURBISHMENT_UNABLE_TO_REPAIR = "REFURBISHMENT_UNABLE_TO_REPAIR", "Refurbishment closed: unable to repair"
+    REFURBISHMENT_CANCELLED = "REFURBISHMENT_CANCELLED", "Work order cancelled"
 
 
 class AuditLogQuerySet(models.QuerySet):

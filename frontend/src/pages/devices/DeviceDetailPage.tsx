@@ -12,6 +12,7 @@ import { deviceApi, errorMessage, type Attachment, type Device, type DeviceStatu
 import { dateTime } from '../../lib/format'
 import DeviceAssessmentPanel from '../assessments/DeviceAssessmentPanel'
 import DeviceRecoveryPanel from '../recovery/DeviceRecoveryPanel'
+import DeviceRefurbishmentPanel from '../refurbishment/DeviceRefurbishmentPanel'
 
 function History({ entries }: { entries: DeviceStatusChange[] }) {
   if (entries.length === 0) return <p className="text-sm text-slate-500">No status changes recorded.</p>
@@ -152,6 +153,15 @@ export default function DeviceDetailPage() {
           />
 
           <DeviceAssessmentPanel
+            device={device}
+            onLifecycleChange={(message) => {
+              setNoticeFor({ deviceId: device.id, text: message })
+              setReloadKey((k) => k + 1)
+            }}
+            onEvidenceAdded={reloadAttachments}
+          />
+
+          <DeviceRefurbishmentPanel
             device={device}
             onLifecycleChange={(message) => {
               setNoticeFor({ deviceId: device.id, text: message })

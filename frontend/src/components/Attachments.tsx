@@ -44,6 +44,9 @@ export function AttachmentList({ items, emptyTitle = 'No attachments yet' }: { i
             {item.assessment_reference && (
               <p className="text-xs font-medium text-indigo-700">Assessment evidence · {item.assessment_reference}</p>
             )}
+            {item.refurbishment_reference && (
+              <p className="text-xs font-medium text-violet-700">Refurbishment evidence · {item.refurbishment_reference}</p>
+            )}
             <p className="text-xs text-slate-500">
               {formatSize(item.size_bytes)} · {item.uploaded_by.full_name} · {dateTime(item.created_at)}
             </p>

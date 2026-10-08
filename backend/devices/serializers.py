@@ -197,6 +197,8 @@ class AttachmentSerializer(serializers.ModelSerializer):
     recovery_reference = serializers.CharField(source="recovery.reference", read_only=True, default=None)
     # Set when the file is evidence for an assessment; linked only through the assessment endpoint.
     assessment_reference = serializers.CharField(source="assessment.reference", read_only=True, default=None)
+    # Set when the file is evidence for a refurbishment work order.
+    refurbishment_reference = serializers.CharField(source="refurbishment.reference", read_only=True, default=None)
 
     class Meta:
         model = Attachment
@@ -214,8 +216,12 @@ class AttachmentSerializer(serializers.ModelSerializer):
             "recovery_reference",
             "assessment",
             "assessment_reference",
+            "refurbishment",
+            "refurbishment_reference",
         ]
-        read_only_fields = ["original_name", "mime_type", "size_bytes", "created_at", "recovery", "assessment"]
+        read_only_fields = [
+            "original_name", "mime_type", "size_bytes", "created_at", "recovery", "assessment", "refurbishment"
+        ]
 
     def validate_file(self, upload):
         self._mime_type = _django_errors(validate_attachment, upload)

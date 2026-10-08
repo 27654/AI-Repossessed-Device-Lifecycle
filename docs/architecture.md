@@ -68,9 +68,9 @@ This keeps every state change auditable and consistent no matter which endpoint 
 | DeviceStatusChange | Lifecycle history: every status transition |
 | Recovery | How, when and where the device was repossessed |
 | Assessment | Structured condition checklist (controlled choices), defects and RWF estimates; Draft → Submitted |
-| RefurbishmentWorkOrder | Repair job assigned to a technician |
-| RefurbishmentStep | Steps carried out (cleaning, parts replacement, software reset…) |
-| RefurbishmentItem | Parts/materials used, with cost |
+| RefurbishmentWorkOrder | Repair job (`REF-YYYY-NNNNN`) for a Refurbishing device: Open → In progress → Completed (repaired / unable to repair) or Cancelled |
+| RefurbishmentStep | Work and checks on a work order (diagnosis, cleaning, screen repair, … functional test, quality check) with status and timestamps |
+| RefurbishmentItem | Parts/materials used: quantity × unit cost (whole RWF) |
 | Disposition | Final reallocation or resale |
 | AIRecommendation | The rule engine's recommendation for one submitted assessment, and (separately) the human final decision |
 | AIFeedback | One staff member's verdict on a recommendation (would accept / would override) with an optional comment |
@@ -132,7 +132,7 @@ The Device is the hub. Lifecycle records hang off it and are never overwritten, 
 
 - DRF default: every endpoint requires an authenticated user. Only login, CSRF and health endpoints opt out.
 - Each view declares the permission codes it needs with `require_permission(Perm.X)` (`accounts/permissions.py`). Missing permission → **403**; not logged in → **401**.
-- Object-level checks where the spec needs them. For example, Refurbishment Staff may update only work orders assigned to them.
+- Object-level checks where the spec needs them. **(Decision)** Lifecycle records are team work: any holder of the module's permission may manage any open record (e.g. any `refurbishment.manage` user may work on any active work order; the assignee is recorded but not enforced).
 - Querysets are filtered by role where appropriate, so list endpoints never leak records the user may not see.
 
 **Frontend enforcement (convenience only).** Navigation items, routes and action buttons are hidden unless the user's permission list contains the required code. Calling an API directly still hits the backend checks.
@@ -208,9 +208,20 @@ stateDiagram-v2
 1. A Device Assessor starts a **Draft** assessment for a `RECOVERED` device (one draft per device). Every field may be filled in gradually; evidence files can be attached while it is a draft.
 2. **Submit** requires all six condition choices plus the estimated repair cost and a market value above 0 RWF. In one transaction the assessment becomes **Submitted** (immutable), `transition_device(device, ASSESSED, source_type="assessment", source_id=<assessment id>)` runs with the reason "Condition assessment ASS-… submitted.", and the device's condition rating is set from the physical condition (`CRITICAL` maps to `POOR`) through `devices.services.record_condition` (audited).
 3. A user with `ai.request` asks for the **AI recommendation**. It is stored, audited and shown, and **does not touch the device**.
-4. An Operations Manager (`ai.decide`) records the **final decision**: accept the recommendation or override it with a reason. The *human* decision moves the device `ASSESSED → REFURBISHING / READY_FOR_DISPOSITION / UNABLE_TO_REPAIR` via `transition_device(..., source_type="assessment_decision")`. Refurbishment work orders and dispositions themselves are later phases.
+4. An Operations Manager (`ai.decide`) records the **final decision**: accept the recommendation or override it with a reason. The *human* decision moves the device `ASSESSED → REFURBISHING / READY_FOR_DISPOSITION / UNABLE_TO_REPAIR` via `transition_device(..., source_type="assessment_decision")`. Refurbishment work orders follow in Phase 7 (below); dispositions are a later phase.
 
 Only one submitted assessment can exist per device (partial unique index). The lifecycle has no path back to `RECOVERED`, so re-assessment is not possible yet; if it is added, the earlier assessment stays as history.
+
+**Refurbishment (Phase 7).** `refurbishment.services` owns the exits from `REFURBISHING`:
+
+1. Refurbishment staff (`refurbishment.manage`) open a **work order** for a `REFURBISHING` device (one active work order per device; partial unique index). It is planned while **Open** (assignee, diagnosis, estimated cost, steps, parts) and **started** (`In progress`, `started_at`; unassigned work goes to whoever starts it).
+2. **Steps** move `Pending → In progress → Completed`, or to `Skipped` with a reason. Progress needs a started work order; completed and skipped steps are final.
+3. **Parts** record quantity × unit cost; the server calculates each line total and the parts total.
+4. **Complete** (repaired) requires a work summary, the labour cost, every step completed or skipped with a reason, and a completed **Functional test** and **Quality check** (they cannot be skipped). The actual cost = parts total + labour is calculated and frozen. In one transaction (work order and device rows locked) the work order becomes Completed/Repaired and `transition_device(device, READY_FOR_DISPOSITION, source_type="refurbishment", source_id=<work order id>)` runs.
+5. **Unable to repair** requires a reason; the work order becomes Completed/Unable to repair (actual cost = parts used + any labour) and the device moves `REFURBISHING → UNABLE_TO_REPAIR` the same way.
+6. **Cancel** (reason required) closes a work order opened in error without changing the device, which stays `REFURBISHING` for a new work order.
+
+Closed work orders, their steps and parts are history: service checks plus PostgreSQL triggers reject changes and deletes. The AI never creates, starts or completes a work order.
 
 **Rules enforced in `transition_device`** (implemented in the Device Management phase):
 
@@ -219,9 +230,12 @@ Only one submitted assessment can exist per device (partial unique index). The l
 - A signed-in, active staff member must be the actor, and `source_type` `ai_recommendation`/`ai_engine` is refused: **AI never changes a device's status.**
 - `DeviceStatusChange` is append-only: model guards plus a PostgreSQL trigger reject `UPDATE`/`DELETE`, and devices with history cannot be deleted (`PROTECT`).
 
-Added by later lifecycle phases (not yet enforced):
+Enforced by the lifecycle services (not by `transition_device` itself, which only checks the transition table):
 
-- A device cannot reach `READY_FOR_DISPOSITION` unless it has a submitted assessment, plus a completed work order if that assessment recommended refurbishment.
+- `READY_FOR_DISPOSITION` is reached only through a human final decision on a submitted assessment (Phase 6) or a completed, repaired work order (Phase 7).
+
+Added by a later phase (not yet enforced):
+
 - A device cannot be disposed of unless it is `READY_FOR_DISPOSITION`, and it can have only one confirmed disposition.
 
 **Device identification.** Each device gets a `device_code` (`YRW-<year>-<number>`) from a PostgreSQL sequence, so concurrent registrations never collide. A device needs an IMEI (15 digits, Luhn-checked) or a serial number (stored upper-case, compared case-insensitively); both are unique when present. The previous owner is stored only as a pseudonymous Yellow account reference (letters, digits, `-_/`, no spaces), which keeps names and national IDs out.
@@ -287,7 +301,7 @@ Worked example (from the brief): partially functional, good physical and cosmeti
 - Passwords, MFA secrets and session data are never written to the log.
 - Admins browse it at `/admin/audit-log` with filters for user, action, entity, entity ID and date range.
 
-Audited actions: login / logout / failed login / lockout / unlock / session expiry, password change / reset, MFA setup / enable / disable / verify / failure, user and role changes, device created / updated / status changed, recovery recorded / updated / completed (`RECOVERY_CREATED`, `RECOVERY_UPDATED`, `RECOVERY_COMPLETED`), assessment created / updated / submitted (`ASSESSMENT_CREATED`, `ASSESSMENT_UPDATED`, `ASSESSMENT_SUBMITTED`), device condition set from an assessment (`DEVICE_UPDATED`), AI recommendation generated (`AI_RECOMMENDATION_GENERATED`), final decision accepted / overridden with reason (`AI_DECISION_MADE`), AI feedback (`AI_FEEDBACK_RECORDED`), work order created / updated / completed, disposition recorded / confirmed, attachment uploaded, reference price changed.
+Audited actions: login / logout / failed login / lockout / unlock / session expiry, password change / reset, MFA setup / enable / disable / verify / failure, user and role changes, device created / updated / status changed, recovery recorded / updated / completed (`RECOVERY_CREATED`, `RECOVERY_UPDATED`, `RECOVERY_COMPLETED`), assessment created / updated / submitted (`ASSESSMENT_CREATED`, `ASSESSMENT_UPDATED`, `ASSESSMENT_SUBMITTED`), device condition set from an assessment (`DEVICE_UPDATED`), AI recommendation generated (`AI_RECOMMENDATION_GENERATED`), final decision accepted / overridden with reason (`AI_DECISION_MADE`), AI feedback (`AI_FEEDBACK_RECORDED`), work order created / updated / started / completed / unable to repair / cancelled (`REFURBISHMENT_CREATED`, `REFURBISHMENT_UPDATED`, `REFURBISHMENT_STARTED`, `REFURBISHMENT_COMPLETED`, `REFURBISHMENT_UNABLE_TO_REPAIR`, `REFURBISHMENT_CANCELLED`), refurbishment steps and parts added / updated (`REFURBISHMENT_STEP_CREATED`, `REFURBISHMENT_STEP_UPDATED`, `REFURBISHMENT_ITEM_CREATED`, `REFURBISHMENT_ITEM_UPDATED`), disposition recorded / confirmed, attachment uploaded, reference price changed.
 
 ## 9. API structure
 
@@ -301,7 +315,7 @@ REST, JSON, all under `/api/`. Lists are paginated (`?page=`, 20 per page) and a
 | Devices | `GET/POST /api/devices/` (`?search=&status=&make=&model=&device_type=&condition=&recovered_from=&recovered_to=&page=`) · `GET/PATCH /api/devices/{id}/` · `GET /api/devices/{id}/history/` · `GET/POST /api/devices/{id}/attachments/` · `GET /api/devices/{id}/attachments/{attachment_id}/download/` |
 | Recovery | `GET/POST /api/recoveries/` (`?device=&status=&outcome=&search=&page=`) · `GET/PATCH /api/recoveries/{id}/` (PATCH only while In progress) · `POST /api/recoveries/{id}/complete/` · `GET/POST /api/recoveries/{id}/attachments/`. Read: `device.view`; write: `recovery.manage`. |
 | Assessments | `GET/POST /api/assessments/` (`?device=&status=&search=&page=`) · `GET/PATCH /api/assessments/{id}/` (PATCH only while Draft) · `POST /api/assessments/{id}/submit/` · `GET/POST /api/assessments/{id}/attachments/`. Read: `device.view`; write: `assessment.create`. |
-| Refurbishment | `GET/POST /api/work-orders/` · `GET/PATCH /api/work-orders/{id}/` · `POST /api/work-orders/{id}/steps/` · `POST /api/work-orders/{id}/items/` · `POST /api/work-orders/{id}/complete/` · `POST /api/work-orders/{id}/unable-to-repair/` |
+| Refurbishment | `GET/POST /api/refurbishments/` (`?device=&status=OPEN\|IN_PROGRESS\|COMPLETED\|CANCELLED\|ACTIVE&assigned_to=<id>\|me&search=&page=`) · `GET/PATCH /api/refurbishments/{id}/` (PATCH only while active) · `POST /api/refurbishments/{id}/start/` · `POST /api/refurbishments/{id}/complete/` (`work_summary`, `labour_cost_rwf`) · `POST /api/refurbishments/{id}/unable-to-repair/` (`reason`) · `POST /api/refurbishments/{id}/cancel/` (`reason`) · `GET/POST /api/refurbishments/{id}/steps/` · `PATCH /api/refurbishment-steps/{id}/` · `GET/POST /api/refurbishments/{id}/items/` · `PATCH /api/refurbishment-items/{id}/` · `GET/POST /api/refurbishments/{id}/attachments/` · `GET /api/refurbishments/technicians/`. Read: `device.view`; write: `refurbishment.manage`. |
 | Dispositions | `GET/POST /api/dispositions/` · `GET /api/dispositions/{id}/` · `POST /api/dispositions/{id}/confirm/` |
 | AI | `GET /api/assessments/{id}/ai-recommendation/` (`ai.view`) · `POST /api/assessments/{id}/ai-recommendation/` (`ai.request`) · `POST /api/assessments/{id}/decision/` (`ai.decide`; body `final_decision`, `reason`) · `POST /api/assessments/{id}/ai-feedback/` (`ai.feedback`; body `verdict`, `comment`) · `GET /api/ai-recommendations/` (`ai.view`; `?decision=pending\|decided&recommendation=&outcome=ACCEPTED\|OVERRIDDEN&search=`). Pricing/channel endpoints come with the disposition phase. |
 | Notifications | `GET /api/notifications/` · `GET /api/notifications/unread-count/` · `POST /api/notifications/{id}/read/` · `POST /api/notifications/read-all/` · `POST /api/notifications/announcements/` (admin) |

@@ -3,7 +3,7 @@
 Final-year academic prototype for **Yellow (Rwanda)**. It tracks repossessed devices through
 **Recovery → Condition Assessment → Refurbishment → Reallocation/Resale**, with role-based access control, a full audit trail, and transparent rule-based AI decision support. The AI only recommends; humans decide.
 
-> **Status:** authentication, RBAC, audit, device management, recovery, condition assessment and AI decision support are implemented. The remaining lifecycle modules are added phase by phase. See [docs/architecture.md](docs/architecture.md).
+> **Status:** authentication, RBAC, audit, device management, recovery, condition assessment, AI decision support and refurbishment are implemented. Reallocation/resale (dispositions), pricing/channel recommendations, notifications and analytics are future phases. See [docs/architecture.md](docs/architecture.md).
 
 ## Tech stack
 
@@ -143,3 +143,13 @@ cd frontend && npm run lint                      # lint
 The current AI component is an explainable rule-based decision-support engine. Future versions could replace or augment it with a trained machine-learning model when sufficient historical device lifecycle data is available.
 
 Scoring rules, thresholds and limitations: [docs/architecture.md §7](docs/architecture.md#7-ai-decision-support).
+
+## Refurbishment
+
+1. When the final decision is **Refurbish**, the device is *Refurbishing*. Refurbishment staff open it (or go to **Refurbishment**) and **create a work order**: assignee, diagnosis, estimated cost (RWF).
+2. **Start work**, then add and work through **steps** (diagnosis, cleaning, screen repair, battery replacement, software reset, …). A step can be skipped only with a reason.
+3. Record **parts and materials** (quantity × unit cost; totals are calculated by the server) and attach **evidence** (before/after photos, test reports).
+4. **Complete refurbishment**: needs a work summary, the labour cost, every step finished or skipped, and a completed **Functional test** and **Quality check**. The actual cost (parts + labour) is calculated and the device moves to *Ready for disposition*.
+5. If the device cannot be fixed, **Unable to repair** (reason required) closes the work order and moves the device to *Unable to repair*. **Cancel** closes a work order opened by mistake and leaves the device in refurbishment.
+
+Closed work orders, steps and parts are kept as read-only history. Reallocation and resale of ready devices are a future phase.

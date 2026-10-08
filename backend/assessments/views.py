@@ -21,7 +21,7 @@ SEARCH_FIELDS = ["reference", "device__device_code", "device__imei", "device__se
 
 def assessment_queryset():
     return Assessment.objects.select_related("device", "assessor", "ai_recommendation").prefetch_related(
-        Prefetch("attachments", queryset=Attachment.objects.select_related("uploaded_by", "recovery", "assessment"))
+        Prefetch("attachments", queryset=Attachment.objects.select_related("uploaded_by", "recovery", "assessment", "refurbishment"))
     )
 
 
@@ -94,7 +94,7 @@ class AssessmentAttachmentListCreateView(generics.ListCreateAPIView):
         return get_object_or_404(Assessment.objects.select_related("device"), pk=self.kwargs["pk"])
 
     def get_queryset(self):
-        return self.get_assessment().attachments.select_related("uploaded_by", "recovery", "assessment")
+        return self.get_assessment().attachments.select_related("uploaded_by", "recovery", "assessment", "refurbishment")
 
     def perform_create(self, serializer):
         assessment = self.get_assessment()
