@@ -168,7 +168,7 @@ The device's `status` is the single source of truth. The *lifecycle stage* shown
 ```mermaid
 stateDiagram-v2
     [*] --> IN_RECOVERY: recovery initiated
-    IN_RECOVERY --> RECOVERED: recovery marked Received
+    IN_RECOVERY --> RECOVERED: recovery completed (Recovered / Recovered with issues)
     RECOVERED --> ASSESSED: assessment submitted
     ASSESSED --> REFURBISHING: work order started
     ASSESSED --> READY_FOR_DISPOSITION: assessment says no refurbishment needed
@@ -192,6 +192,16 @@ stateDiagram-v2
 | `UNABLE_TO_REPAIR` | Exception (closed) |
 
 **Registration.** `devices.services.register_device` creates a device in `IN_RECOVERY` (recovery under way) or `RECOVERED` (already in hand) and writes the first `DeviceStatusChange` (from: none). The status cannot be set or edited through the device API.
+
+**Recovery (Phase 5).** `recovery.services` owns the `IN_RECOVERY → RECOVERED` step:
+
+1. A Recovery Officer opens a recovery record (`IN_PROGRESS`) for a device that is `IN_RECOVERY` and has no other open recovery. It stays editable and can collect evidence files.
+2. **Complete** locks the record. The outcome, location, and (for *Recovered with issues* / *Not recovered*) notes are required.
+   - *Recovered* or *Recovered with issues*: in the same transaction the service calls `transition_device(device, RECOVERED, source_type="recovery", source_id=<recovery id>)`, which writes the `DeviceStatusChange` and audit entry.
+   - *Not recovered*: the attempt is closed as history and the device stays `IN_RECOVERY`; a new attempt can be recorded.
+3. A completed recovery cannot be edited, completed again or given new evidence (service checks plus a PostgreSQL trigger).
+
+**(Decision)** The original specification listed recovery statuses *Initiated / In Transit / Received*. The prototype uses a record status (*In progress → Completed*) plus an outcome instead: *In progress* covers initiated and in transit, and completing with a successful outcome is the point of receipt. Devices registered directly as `RECOVERED` (already in hand) have no recovery record.
 
 **Rules enforced in `transition_device`** (implemented in the Device Management phase):
 
@@ -245,7 +255,7 @@ A **transparent, rule-based prototype decision-support engine**. No machine-lear
 - Passwords, MFA secrets and session data are never written to the log.
 - Admins browse it at `/admin/audit-log` with filters for user, action, entity, entity ID and date range.
 
-Audited actions: login / logout / failed login / lockout / unlock / session expiry, password change / reset, MFA setup / enable / disable / verify / failure, user and role changes, device created / updated / status changed, recovery recorded / updated, assessment created / modified, work order created / updated / completed, AI recommendation generated / accepted / overridden, feedback given, disposition recorded / confirmed, attachment uploaded, reference price changed.
+Audited actions: login / logout / failed login / lockout / unlock / session expiry, password change / reset, MFA setup / enable / disable / verify / failure, user and role changes, device created / updated / status changed, recovery recorded / updated / completed (`RECOVERY_CREATED`, `RECOVERY_UPDATED`, `RECOVERY_COMPLETED`), assessment created / modified, work order created / updated / completed, AI recommendation generated / accepted / overridden, feedback given, disposition recorded / confirmed, attachment uploaded, reference price changed.
 
 ## 9. API structure
 
@@ -257,7 +267,7 @@ REST, JSON, all under `/api/`. Lists are paginated (`?page=`, 20 per page) and a
 | Auth | `GET /api/auth/csrf/` · `POST /api/auth/login/` · `POST /api/auth/mfa/verify/` · `POST /api/auth/logout/` · `GET/PATCH /api/auth/me/` · `POST /api/auth/change-password/` · `POST /api/auth/mfa/setup/`, `/mfa/confirm/`, `/mfa/disable/` |
 | Users & roles | `GET/POST /api/users/` · `GET/PATCH /api/users/{id}/` · `POST /api/users/{id}/reset-password/` · `POST /api/users/{id}/reset-mfa/` · `POST /api/users/{id}/unlock/` · `GET /api/roles/` · `PATCH /api/roles/{id}/` · `GET /api/permissions/` · `GET /api/login-attempts/` |
 | Devices | `GET/POST /api/devices/` (`?search=&status=&make=&model=&device_type=&condition=&recovered_from=&recovered_to=&page=`) · `GET/PATCH /api/devices/{id}/` · `GET /api/devices/{id}/history/` · `GET/POST /api/devices/{id}/attachments/` · `GET /api/devices/{id}/attachments/{attachment_id}/download/` |
-| Recovery | `GET/POST /api/recoveries/` · `GET/PATCH /api/recoveries/{id}/` (status: Initiated → In Transit → Received) |
+| Recovery | `GET/POST /api/recoveries/` (`?device=&status=&outcome=&search=&page=`) · `GET/PATCH /api/recoveries/{id}/` (PATCH only while In progress) · `POST /api/recoveries/{id}/complete/` · `GET/POST /api/recoveries/{id}/attachments/`. Read: `device.view`; write: `recovery.manage`. |
 | Assessments | `GET/POST /api/assessments/` · `GET/PATCH /api/assessments/{id}/` |
 | Refurbishment | `GET/POST /api/work-orders/` · `GET/PATCH /api/work-orders/{id}/` · `POST /api/work-orders/{id}/steps/` · `POST /api/work-orders/{id}/items/` · `POST /api/work-orders/{id}/complete/` · `POST /api/work-orders/{id}/unable-to-repair/` |
 | Dispositions | `GET/POST /api/dispositions/` · `GET /api/dispositions/{id}/` · `POST /api/dispositions/{id}/confirm/` |

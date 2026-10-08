@@ -3,7 +3,7 @@
 Final-year academic prototype for **Yellow (Rwanda)**. It tracks repossessed devices through
 **Recovery → Condition Assessment → Refurbishment → Reallocation/Resale**, with role-based access control, a full audit trail, and transparent rule-based AI decision support. The AI only recommends; humans decide.
 
-> **Status:** authentication, RBAC, audit and device management are implemented. The remaining lifecycle modules are added phase by phase. See [docs/architecture.md](docs/architecture.md).
+> **Status:** authentication, RBAC, audit, device management and recovery are implemented. The remaining lifecycle modules are added phase by phase. See [docs/architecture.md](docs/architecture.md).
 
 ## Tech stack
 

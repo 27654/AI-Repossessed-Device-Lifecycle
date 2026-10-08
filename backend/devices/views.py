@@ -116,7 +116,7 @@ class DeviceAttachmentListCreateView(generics.ListCreateAPIView):
         return get_object_or_404(Device, pk=self.kwargs["pk"])
 
     def get_queryset(self):
-        return self.get_device().attachments.select_related("uploaded_by")
+        return self.get_device().attachments.select_related("uploaded_by", "recovery")
 
     def perform_create(self, serializer):
         data = serializer.validated_data

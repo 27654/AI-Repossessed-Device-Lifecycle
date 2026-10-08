@@ -86,7 +86,7 @@ Conventions:
 - CHECK: at least one of `imei` / `serial_number` is present.
 - *Lifecycle stage* is derived from `status` (architecture.md §6) and returned by the API, not stored.
 - `status` and `current_condition` are the only cached values on Device. They are written only by lifecycle services (`devices.services`), and the full history behind them lives in the related tables.
-- **(Decision)** `recovery_reference` and `recovery_date` are captured at registration so devices can be filtered by recovery date before the Recovery module exists. The Recovery module will keep them in step with its records.
+- **(Decision)** `recovery_reference` and `recovery_date` are captured at registration so devices can be filtered by recovery date before the Recovery module exists. The Recovery module keeps them in step with its records (see Recovery below).
 
 ### DeviceStatusChange (lifecycle history, append-only)
 | Field | Type | Notes |
@@ -105,6 +105,7 @@ A PostgreSQL trigger rejects `UPDATE` and `DELETE`. Used for the device history 
 | Field | Type | Notes |
 |---|---|---|
 | device | FK → Device, `PROTECT` | Every file belongs to a device |
+| recovery | FK → Recovery, nullable, `PROTECT` | Set when the file is evidence for a recovery (same device, checked in the service) |
 | file | file path | `attachments/YYYY/MM/<uuid4>.<ext>` under `MEDIA_ROOT`; never returned by the API |
 | original_name | varchar(255) | Base name only, sanitised |
 | mime_type | varchar(50) | Detected from the file signature: JPEG, PNG, WebP, PDF |
@@ -113,26 +114,39 @@ A PostgreSQL trigger rejects `UPDATE` and `DELETE`. Used for the device history 
 | uploaded_by | FK → User | |
 | created_at | timestamptz | |
 
-A link from an attachment to a Recovery, Assessment, Work Order or Disposition (`content_type` / `object_id`) is added with those modules.
+**(Decision)** A lifecycle record links its evidence through a nullable foreign key on Attachment, one per module (`recovery` now; assessment, work order and disposition when those modules are built). This replaces the earlier generic `content_type` / `object_id` idea: real foreign keys give referential integrity and simple queries. All files keep the same upload checks, storage and authenticated download.
 
 ---
 
 ## Lifecycle records
 
 ### Recovery
+One attempt to repossess a device. Kept as historical evidence.
+
 | Field | Type | Notes |
 |---|---|---|
-| device | FK → Device | |
-| recovered_at | timestamptz | Recovery date + time |
-| location | varchar(200) | e.g. district / sector |
+| reference | varchar(20), unique | `RCV-<year>-<number>`, from the `recovery_recovery_reference_seq` sequence |
+| device | FK → Device, `PROTECT` | |
+| recovery_officer | FK → User, `PROTECT` | The officer who recorded it (the signed-in user) |
+| recovered_at | timestamptz | When the device was recovered, or the attempt was made; not in the future |
+| recovery_location | varchar(200) | e.g. sector / district |
 | recovery_method | enum | **(Decision)** `FIELD_COLLECTION`, `CUSTOMER_SURRENDER`, `AGENT_DROP_OFF`, `OTHER` |
-| previous_owner_ref | varchar(60) | Copied to Device on creation |
-| condition_notes | text | |
-| status | enum | `INITIATED`, `IN_TRANSIT`, `RECEIVED` |
-| received_at | timestamptz, nullable | Set when status → `RECEIVED` |
-| recorded_by | FK → User | |
+| outcome | enum, blank until known | `RECOVERED`, `RECOVERED_WITH_ISSUES`, `NOT_RECOVERED` |
+| condition_notes | text | Visible condition at collection |
+| notes | text | Required to complete with `RECOVERED_WITH_ISSUES` (the issues) or `NOT_RECOVERED` (why) |
+| status | enum | `IN_PROGRESS` (editable) → `COMPLETED` (locked) |
+| completed_by / completed_at | FK → User / timestamptz, nullable | Set on completion |
+| created_at / updated_at | timestamptz | |
 
-Photo evidence: Attachment rows linked to the recovery.
+Constraints:
+- At most one `IN_PROGRESS` recovery per device (partial unique index).
+- At most one completed recovery with a successful outcome per device (partial unique index).
+- A `COMPLETED` row must have an outcome, `completed_by` and `completed_at` (CHECK).
+- A PostgreSQL trigger rejects `UPDATE` of a completed row and `DELETE` of any row.
+
+Evidence photos and documents: Attachment rows with `recovery` set.
+
+**(Decision)** The previous owner stays on Device (`previous_owner_ref`) and is not copied onto Recovery. Completing a successful recovery sets the device's `recovery_date` from `recovered_at`, and fills `recovery_reference` with the recovery's reference if it was empty, through `devices.services.update_device` (audited as a device update).
 
 ### ConditionAssessment
 | Field | Type | Notes |

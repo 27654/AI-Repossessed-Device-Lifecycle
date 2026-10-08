@@ -9,7 +9,8 @@ urlpatterns = [
     path("api/", include("accounts.urls")),
     path("api/", include("audit.urls")),
     path("api/", include("devices.urls")),
-    # Further lifecycle module routes (api/recoveries/, ...) are added phase by phase.
+    path("api/", include("recovery.urls")),
+    # Further lifecycle module routes (api/assessments/, ...) are added phase by phase.
 ]
 
 if settings.DEBUG:

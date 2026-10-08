@@ -179,6 +179,8 @@ class AttachmentSerializer(serializers.ModelSerializer):
     file = serializers.FileField(write_only=True)
     uploaded_by = UserLabelField(read_only=True)
     download_url = serializers.SerializerMethodField()
+    # Set when the file is evidence for a recovery record; linked only through the recovery endpoint.
+    recovery_reference = serializers.CharField(source="recovery.reference", read_only=True, default=None)
 
     class Meta:
         model = Attachment
@@ -192,8 +194,10 @@ class AttachmentSerializer(serializers.ModelSerializer):
             "uploaded_by",
             "created_at",
             "download_url",
+            "recovery",
+            "recovery_reference",
         ]
-        read_only_fields = ["original_name", "mime_type", "size_bytes", "created_at"]
+        read_only_fields = ["original_name", "mime_type", "size_bytes", "created_at", "recovery"]
 
     def validate_file(self, upload):
         self._mime_type = _django_errors(validate_attachment, upload)

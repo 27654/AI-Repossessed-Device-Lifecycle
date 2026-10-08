@@ -161,9 +161,17 @@ def attachment_upload_to(instance, filename):
 
 
 class Attachment(models.Model):
-    """Photo or document about a device. Served only through the authenticated download endpoint."""
+    """Photo or document about a device. Served only through the authenticated download endpoint.
+
+    Every attachment belongs to a device. It may also be evidence for one
+    lifecycle record (a nullable FK per module, e.g. `recovery`); the record
+    must be for the same device (checked in the services that link them).
+    """
 
     device = models.ForeignKey(Device, on_delete=models.PROTECT, related_name="attachments")
+    recovery = models.ForeignKey(
+        "recovery.Recovery", on_delete=models.PROTECT, null=True, blank=True, related_name="attachments"
+    )
     file = models.FileField(upload_to=attachment_upload_to, max_length=200)
     original_name = models.CharField(max_length=255)
     mime_type = models.CharField(max_length=50, choices=[(t, t) for t in ALLOWED_FILE_TYPES])

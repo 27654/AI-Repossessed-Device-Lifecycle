@@ -183,10 +183,16 @@ def transition_device(device, to_status, *, actor, reason="", source_type="", so
 
 
 @transaction.atomic
-def add_attachment(device, *, actor, upload, mime_type, original_name, description="", request=None):
-    """Store an already validated upload and audit it (file metadata only)."""
+def add_attachment(device, *, actor, upload, mime_type, original_name, description="", recovery=None, request=None):
+    """Store an already validated upload and audit it (file metadata only).
+
+    `recovery` optionally links the file as evidence for a recovery record of the same device.
+    """
+    if recovery is not None and recovery.device_id != device.pk:
+        raise ValidationError({"detail": "Evidence must belong to the same device as the recovery."})
     attachment = Attachment(
         device=device,
+        recovery=recovery,
         original_name=original_name,
         mime_type=mime_type,
         size_bytes=upload.size,
@@ -200,12 +206,14 @@ def add_attachment(device, *, actor, upload, mime_type, original_name, descripti
         request=request,
         user=actor,
         entity=device,
-        description=f"Uploaded {original_name} to {device.device_code}.",
+        description=f"Uploaded {original_name} to {device.device_code}"
+        + (f" as evidence for {recovery.reference}." if recovery else "."),
         new_values={
             "attachment_id": attachment.pk,
             "original_name": original_name,
             "mime_type": mime_type,
             "size_bytes": attachment.size_bytes,
+            **({"recovery_id": recovery.pk, "recovery_reference": recovery.reference} if recovery else {}),
         },
     )
     return attachment

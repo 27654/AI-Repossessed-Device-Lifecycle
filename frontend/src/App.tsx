@@ -13,10 +13,11 @@ import PlaceholderPage from './pages/PlaceholderPage'
 import DeviceDetailPage from './pages/devices/DeviceDetailPage'
 import DeviceFormPage from './pages/devices/DeviceFormPage'
 import DeviceListPage from './pages/devices/DeviceListPage'
+import RecoveryListPage from './pages/recovery/RecoveryListPage'
 import { Perm } from './config/permissions'
 
 // Modules not built yet show a placeholder.
-const IMPLEMENTED = ['/dashboard', '/devices']
+const IMPLEMENTED = ['/dashboard', '/devices', '/recovery']
 const modulePages = navItems.filter((item) => !IMPLEMENTED.includes(item.path))
 
 const guarded = (permission: string, element: ReactNode) => (
@@ -41,6 +42,7 @@ const router = createBrowserRouter([
       { path: 'devices/new', element: guarded(Perm.DEVICE_CREATE, <DeviceFormPage />) },
       { path: 'devices/:id', element: guarded(Perm.DEVICE_VIEW, <DeviceDetailPage />) },
       { path: 'devices/:id/edit', element: guarded(Perm.DEVICE_UPDATE, <DeviceFormPage />) },
+      { path: 'recovery', element: guarded(Perm.RECOVERY_MANAGE, <RecoveryListPage />) },
       ...modulePages.map((item) => ({
         path: item.path.slice(1),
         element: (

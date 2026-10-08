@@ -29,6 +29,9 @@ class AuditAction(models.TextChoices):
     DEVICE_UPDATED = "DEVICE_UPDATED", "Device updated"
     DEVICE_STATUS_CHANGED = "DEVICE_STATUS_CHANGED", "Device status changed"
     ATTACHMENT_UPLOADED = "ATTACHMENT_UPLOADED", "Attachment uploaded"
+    RECOVERY_CREATED = "RECOVERY_CREATED", "Recovery recorded"
+    RECOVERY_UPDATED = "RECOVERY_UPDATED", "Recovery updated"
+    RECOVERY_COMPLETED = "RECOVERY_COMPLETED", "Recovery completed"
 
 
 class AuditLogQuerySet(models.QuerySet):

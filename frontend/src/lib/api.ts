@@ -220,6 +220,9 @@ export interface Attachment {
   uploaded_by: UserLabel
   created_at: string
   download_url: string
+  // Set when the file is evidence for a recovery record.
+  recovery: number | null
+  recovery_reference: string | null
 }
 
 export type DeviceFilters = Partial<
@@ -246,5 +249,64 @@ export const deviceApi = {
     body.append('file', file)
     body.append('description', description)
     return apiRequest<Attachment>(`/devices/${id}/attachments/`, { method: 'POST', body })
+  },
+}
+
+// --- Recovery ---
+
+export interface Recovery {
+  id: number
+  reference: string
+  device: number
+  device_summary: {
+    id: number
+    device_code: string
+    make: string
+    model: string
+    status: string
+    status_label: string
+  }
+  recovery_officer: UserLabel
+  recovered_at: string
+  recovery_location: string
+  recovery_method: string
+  recovery_method_label: string
+  outcome: string
+  outcome_label: string
+  condition_notes: string
+  notes: string
+  status: 'IN_PROGRESS' | 'COMPLETED'
+  status_label: string
+  completed_by: UserLabel | null
+  completed_at: string | null
+  attachments: Attachment[]
+  created_at: string
+  updated_at: string
+}
+
+// Fields an officer may set while a recovery is in progress.
+export interface RecoveryInput {
+  recovered_at: string
+  recovery_location: string
+  recovery_method: string
+  outcome: string
+  condition_notes: string
+  notes: string
+}
+
+export type RecoveryFilters = Partial<Record<'device' | 'status' | 'outcome' | 'search' | 'page', string>>
+
+export const recoveryApi = {
+  list: (filters: RecoveryFilters) => apiRequest<Paginated<Recovery>>(`/recoveries/${queryString(filters)}`),
+  get: (id: number) => apiRequest<Recovery>(`/recoveries/${id}/`),
+  create: (device: number, input: RecoveryInput) => post<Recovery>('/recoveries/', { device, ...input }),
+  update: (id: number, input: Partial<RecoveryInput>) =>
+    apiRequest<Recovery>(`/recoveries/${id}/`, { method: 'PATCH', body: JSON.stringify(input) }),
+  complete: (id: number) => post<Recovery>(`/recoveries/${id}/complete/`),
+  uploadEvidence: (id: number, file: File, description: string) => {
+    const body = new FormData()
+    body.append('file', file)
+    body.append('description', description)
+    return apiRequest<Attachment>(`/recoveries/${id}/attachments/`, { method: 'POST', body })
   },
 }
