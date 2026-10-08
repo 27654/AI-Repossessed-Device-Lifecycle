@@ -32,6 +32,12 @@ class AuditAction(models.TextChoices):
     RECOVERY_CREATED = "RECOVERY_CREATED", "Recovery recorded"
     RECOVERY_UPDATED = "RECOVERY_UPDATED", "Recovery updated"
     RECOVERY_COMPLETED = "RECOVERY_COMPLETED", "Recovery completed"
+    ASSESSMENT_CREATED = "ASSESSMENT_CREATED", "Assessment created"
+    ASSESSMENT_UPDATED = "ASSESSMENT_UPDATED", "Assessment updated"
+    ASSESSMENT_SUBMITTED = "ASSESSMENT_SUBMITTED", "Assessment submitted"
+    AI_RECOMMENDATION_GENERATED = "AI_RECOMMENDATION_GENERATED", "AI recommendation generated"
+    AI_FEEDBACK_RECORDED = "AI_FEEDBACK_RECORDED", "AI feedback recorded"
+    AI_DECISION_MADE = "AI_DECISION_MADE", "Final decision on AI recommendation"
 
 
 class AuditLogQuerySet(models.QuerySet):

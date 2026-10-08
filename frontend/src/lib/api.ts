@@ -220,9 +220,11 @@ export interface Attachment {
   uploaded_by: UserLabel
   created_at: string
   download_url: string
-  // Set when the file is evidence for a recovery record.
+  // Set when the file is evidence for a recovery record or an assessment.
   recovery: number | null
   recovery_reference: string | null
+  assessment: number | null
+  assessment_reference: string | null
 }
 
 export type DeviceFilters = Partial<
@@ -309,4 +311,132 @@ export const recoveryApi = {
     body.append('description', description)
     return apiRequest<Attachment>(`/recoveries/${id}/attachments/`, { method: 'POST', body })
   },
+}
+
+// --- Condition assessment ---
+
+export interface DeviceLabel {
+  id: number
+  device_code: string
+  make: string
+  model: string
+  status: string
+  status_label: string
+}
+
+export interface Assessment {
+  id: number
+  reference: string
+  device: number
+  device_summary: DeviceLabel
+  assessor: UserLabel
+  assessment_date: string
+  physical_condition: string
+  physical_condition_label: string
+  cosmetic_condition: string
+  cosmetic_condition_label: string
+  screen_condition: string
+  screen_condition_label: string
+  battery_condition: string
+  battery_condition_label: string
+  functional_status: string
+  functional_status_label: string
+  accessories_condition: string
+  accessories_condition_label: string
+  defects: string[]
+  defect_labels: string[]
+  assessment_notes: string
+  estimated_repair_cost_rwf: number | null
+  estimated_market_value_rwf: number | null
+  status: 'DRAFT' | 'SUBMITTED'
+  status_label: string
+  submitted_at: string | null
+  has_ai_recommendation: boolean
+  attachments: Attachment[]
+  created_at: string
+  updated_at: string
+}
+
+// Fields an assessor may set while the assessment is a draft.
+export interface AssessmentInput {
+  assessment_date: string
+  physical_condition: string
+  cosmetic_condition: string
+  screen_condition: string
+  battery_condition: string
+  functional_status: string
+  accessories_condition: string
+  defects: string[]
+  assessment_notes: string
+  estimated_repair_cost_rwf: number | null
+  estimated_market_value_rwf: number | null
+}
+
+export type AssessmentFilters = Partial<Record<'device' | 'status' | 'search' | 'page', string>>
+
+export const assessmentApi = {
+  list: (filters: AssessmentFilters) => apiRequest<Paginated<Assessment>>(`/assessments/${queryString(filters)}`),
+  get: (id: number) => apiRequest<Assessment>(`/assessments/${id}/`),
+  create: (device: number, input: AssessmentInput) => post<Assessment>('/assessments/', { device, ...input }),
+  update: (id: number, input: Partial<AssessmentInput>) =>
+    apiRequest<Assessment>(`/assessments/${id}/`, { method: 'PATCH', body: JSON.stringify(input) }),
+  submit: (id: number) => post<Assessment>(`/assessments/${id}/submit/`),
+  uploadEvidence: (id: number, file: File, description: string) => {
+    const body = new FormData()
+    body.append('file', file)
+    body.append('description', description)
+    return apiRequest<Attachment>(`/assessments/${id}/attachments/`, { method: 'POST', body })
+  },
+}
+
+// --- AI decision support ---
+
+export type AIDecision = 'REFURBISH' | 'READY_FOR_DISPOSITION' | 'UNABLE_TO_REPAIR'
+
+export interface AIFeedback {
+  id: number
+  user: UserLabel
+  verdict: 'ACCEPTED' | 'OVERRIDDEN'
+  verdict_label: string
+  comment: string
+  created_at: string
+}
+
+export interface AIRecommendation {
+  id: number
+  assessment: number
+  assessment_reference: string
+  device_summary: DeviceLabel
+  recommendation: AIDecision
+  recommendation_label: string
+  score: number
+  confidence: number
+  reasons: string[]
+  factors: Record<string, number>
+  rule_version: string
+  method: string
+  requested_by: UserLabel
+  generated_at: string
+  final_decision: AIDecision | null
+  final_decision_label: string | null
+  final_decision_by: UserLabel | null
+  final_decision_at: string | null
+  final_decision_reason: string
+  decision_outcome: 'ACCEPTED' | 'OVERRIDDEN' | null
+  feedback: AIFeedback[]
+}
+
+export type AIRecommendationFilters = Partial<
+  Record<'decision' | 'recommendation' | 'outcome' | 'search' | 'page', string>
+>
+
+export const aiApi = {
+  list: (filters: AIRecommendationFilters) =>
+    apiRequest<Paginated<AIRecommendation>>(`/ai-recommendations/${queryString(filters)}`),
+  get: (assessmentId: number) => apiRequest<AIRecommendation>(`/assessments/${assessmentId}/ai-recommendation/`),
+  generate: (assessmentId: number) => post<AIRecommendation>(`/assessments/${assessmentId}/ai-recommendation/`),
+  decide: (assessmentId: number, final_decision: AIDecision, reason: string) =>
+    post<AIRecommendation>(`/assessments/${assessmentId}/decision/`, { final_decision, reason }),
+  feedback: (assessmentId: number, verdict: AIFeedback['verdict'], comment: string) =>
+    post<AIFeedback>(`/assessments/${assessmentId}/ai-feedback/`, { verdict, comment }),
 }

@@ -164,13 +164,16 @@ class Attachment(models.Model):
     """Photo or document about a device. Served only through the authenticated download endpoint.
 
     Every attachment belongs to a device. It may also be evidence for one
-    lifecycle record (a nullable FK per module, e.g. `recovery`); the record
+    lifecycle record (a nullable FK per module: `recovery`, `assessment`); the record
     must be for the same device (checked in the services that link them).
     """
 
     device = models.ForeignKey(Device, on_delete=models.PROTECT, related_name="attachments")
     recovery = models.ForeignKey(
         "recovery.Recovery", on_delete=models.PROTECT, null=True, blank=True, related_name="attachments"
+    )
+    assessment = models.ForeignKey(
+        "assessments.Assessment", on_delete=models.PROTECT, null=True, blank=True, related_name="attachments"
     )
     file = models.FileField(upload_to=attachment_upload_to, max_length=200)
     original_name = models.CharField(max_length=255)
@@ -182,6 +185,13 @@ class Attachment(models.Model):
 
     class Meta:
         ordering = ["-created_at", "-id"]
+        constraints = [
+            # Evidence for at most one lifecycle record.
+            models.CheckConstraint(
+                condition=Q(recovery__isnull=True) | Q(assessment__isnull=True),
+                name="attachment_single_lifecycle_link",
+            ),
+        ]
 
     def __str__(self):
         return self.original_name

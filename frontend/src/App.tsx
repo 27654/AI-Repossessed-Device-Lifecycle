@@ -13,11 +13,13 @@ import PlaceholderPage from './pages/PlaceholderPage'
 import DeviceDetailPage from './pages/devices/DeviceDetailPage'
 import DeviceFormPage from './pages/devices/DeviceFormPage'
 import DeviceListPage from './pages/devices/DeviceListPage'
+import AIRecommendationListPage from './pages/assessments/AIRecommendationListPage'
+import AssessmentListPage from './pages/assessments/AssessmentListPage'
 import RecoveryListPage from './pages/recovery/RecoveryListPage'
 import { Perm } from './config/permissions'
 
 // Modules not built yet show a placeholder.
-const IMPLEMENTED = ['/dashboard', '/devices', '/recovery']
+const IMPLEMENTED = ['/dashboard', '/devices', '/recovery', '/assessments', '/ai-recommendations']
 const modulePages = navItems.filter((item) => !IMPLEMENTED.includes(item.path))
 
 const guarded = (permission: string, element: ReactNode) => (
@@ -43,6 +45,8 @@ const router = createBrowserRouter([
       { path: 'devices/:id', element: guarded(Perm.DEVICE_VIEW, <DeviceDetailPage />) },
       { path: 'devices/:id/edit', element: guarded(Perm.DEVICE_UPDATE, <DeviceFormPage />) },
       { path: 'recovery', element: guarded(Perm.RECOVERY_MANAGE, <RecoveryListPage />) },
+      { path: 'assessments', element: guarded(Perm.ASSESSMENT_CREATE, <AssessmentListPage />) },
+      { path: 'ai-recommendations', element: guarded(Perm.AI_VIEW, <AIRecommendationListPage />) },
       ...modulePages.map((item) => ({
         path: item.path.slice(1),
         element: (

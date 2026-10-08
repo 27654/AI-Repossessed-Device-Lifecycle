@@ -11,7 +11,7 @@ from rest_framework.exceptions import ValidationError
 from audit.models import AuditAction
 from audit.services import log_action
 
-from .models import Attachment, Device, DeviceStatus, DeviceStatusChange
+from .models import Attachment, Device, DeviceCondition, DeviceStatus, DeviceStatusChange
 
 # Allowed lifecycle transitions (docs/architecture.md section 6).
 ALLOWED_TRANSITIONS = {
@@ -183,16 +183,50 @@ def transition_device(device, to_status, *, actor, reason="", source_type="", so
 
 
 @transaction.atomic
-def add_attachment(device, *, actor, upload, mime_type, original_name, description="", recovery=None, request=None):
+def record_condition(device, condition, *, actor, source_reference, request=None):
+    """Set the device's condition rating from a submitted assessment and audit the change.
+
+    `current_condition` is not editable through update_device: only a
+    lifecycle record (an assessment) may set it.
+    """
+    if condition not in DeviceCondition.values:
+        raise ValidationError({"current_condition": f"Unknown condition '{condition}'."})
+    device = Device.objects.select_for_update().get(pk=device.pk)
+    previous = device.current_condition
+    if previous == condition:
+        return device
+    device.current_condition = condition
+    device.save(update_fields=["current_condition", "updated_at"])
+    log_action(
+        AuditAction.DEVICE_UPDATED,
+        request=request,
+        user=actor,
+        entity=device,
+        description=f"Condition of {device.device_code} set to {DeviceCondition(condition).label} by {source_reference}.",
+        previous_values={"current_condition": previous},
+        new_values={"current_condition": condition, "source": source_reference},
+    )
+    return device
+
+
+@transaction.atomic
+def add_attachment(
+    device, *, actor, upload, mime_type, original_name, description="", recovery=None, assessment=None, request=None
+):
     """Store an already validated upload and audit it (file metadata only).
 
-    `recovery` optionally links the file as evidence for a recovery record of the same device.
+    `recovery` or `assessment` optionally links the file as evidence for that
+    record, which must belong to the same device.
     """
-    if recovery is not None and recovery.device_id != device.pk:
-        raise ValidationError({"detail": "Evidence must belong to the same device as the recovery."})
+    if recovery is not None and assessment is not None:
+        raise ValidationError({"detail": "A file can be evidence for one record only."})
+    record = recovery or assessment
+    if record is not None and record.device_id != device.pk:
+        raise ValidationError({"detail": "Evidence must belong to the same device as its record."})
     attachment = Attachment(
         device=device,
         recovery=recovery,
+        assessment=assessment,
         original_name=original_name,
         mime_type=mime_type,
         size_bytes=upload.size,
@@ -207,13 +241,14 @@ def add_attachment(device, *, actor, upload, mime_type, original_name, descripti
         user=actor,
         entity=device,
         description=f"Uploaded {original_name} to {device.device_code}"
-        + (f" as evidence for {recovery.reference}." if recovery else "."),
+        + (f" as evidence for {record.reference}." if record else "."),
         new_values={
             "attachment_id": attachment.pk,
             "original_name": original_name,
             "mime_type": mime_type,
             "size_bytes": attachment.size_bytes,
             **({"recovery_id": recovery.pk, "recovery_reference": recovery.reference} if recovery else {}),
+            **({"assessment_id": assessment.pk, "assessment_reference": assessment.reference} if assessment else {}),
         },
     )
     return attachment

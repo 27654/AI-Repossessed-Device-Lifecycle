@@ -26,6 +26,20 @@ class UserLabelField(serializers.Field):
         return {"id": user.pk, "full_name": user.full_name}
 
 
+class DeviceLabelField(serializers.Field):
+    """Short device summary embedded in lifecycle records (recovery, assessment, AI)."""
+
+    def to_representation(self, device):
+        return {
+            "id": device.pk,
+            "device_code": device.device_code,
+            "make": device.make,
+            "model": device.model,
+            "status": device.status,
+            "status_label": device.get_status_display(),
+        }
+
+
 class DeviceListSerializer(serializers.ModelSerializer):
     status_label = serializers.CharField(source="get_status_display", read_only=True)
     device_type_label = serializers.CharField(source="get_device_type_display", read_only=True)
@@ -181,6 +195,8 @@ class AttachmentSerializer(serializers.ModelSerializer):
     download_url = serializers.SerializerMethodField()
     # Set when the file is evidence for a recovery record; linked only through the recovery endpoint.
     recovery_reference = serializers.CharField(source="recovery.reference", read_only=True, default=None)
+    # Set when the file is evidence for an assessment; linked only through the assessment endpoint.
+    assessment_reference = serializers.CharField(source="assessment.reference", read_only=True, default=None)
 
     class Meta:
         model = Attachment
@@ -196,8 +212,10 @@ class AttachmentSerializer(serializers.ModelSerializer):
             "download_url",
             "recovery",
             "recovery_reference",
+            "assessment",
+            "assessment_reference",
         ]
-        read_only_fields = ["original_name", "mime_type", "size_bytes", "created_at", "recovery"]
+        read_only_fields = ["original_name", "mime_type", "size_bytes", "created_at", "recovery", "assessment"]
 
     def validate_file(self, upload):
         self._mime_type = _django_errors(validate_attachment, upload)

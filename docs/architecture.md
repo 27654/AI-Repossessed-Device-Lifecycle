@@ -67,14 +67,14 @@ This keeps every state change auditable and consistent no matter which endpoint 
 | Device | Central record: one per physical device |
 | DeviceStatusChange | Lifecycle history: every status transition |
 | Recovery | How, when and where the device was repossessed |
-| ConditionAssessment | Structured checklist, rating and recommended action |
+| Assessment | Structured condition checklist (controlled choices), defects and RWF estimates; Draft → Submitted |
 | RefurbishmentWorkOrder | Repair job assigned to a technician |
 | RefurbishmentStep | Steps carried out (cleaning, parts replacement, software reset…) |
 | RefurbishmentItem | Parts/materials used, with cost |
 | Disposition | Final reallocation or resale |
-| AIRecommendation | One AI suggestion, its inputs, output, confidence, explanation and human decision |
-| AIFeedback | Helpful / Not helpful rating on a recommendation |
-| ReferencePrice | Admin-maintained base price per make/model (pricing fallback) |
+| AIRecommendation | The rule engine's recommendation for one submitted assessment, and (separately) the human final decision |
+| AIFeedback | One staff member's verdict on a recommendation (would accept / would override) with an optional comment |
+| ReferencePrice | *(planned, pricing phase)* Admin-maintained base price per make/model |
 | Notification | In-app message to one user |
 | AuditLog | Append-only record of every important action |
 | Attachment | Photo or document linked to a device and optionally to a lifecycle record |
@@ -90,12 +90,12 @@ erDiagram
     USER ||--o{ LOGIN_ATTEMPT : makes
     DEVICE ||--o{ DEVICE_STATUS_CHANGE : "history"
     DEVICE ||--o{ RECOVERY : "recovered in"
-    DEVICE ||--o{ CONDITION_ASSESSMENT : "assessed in"
+    DEVICE ||--o{ ASSESSMENT : "assessed in"
+    ASSESSMENT ||--o| AI_RECOMMENDATION : "scored by"
     DEVICE ||--o{ REFURBISHMENT_WORK_ORDER : "refurbished in"
     REFURBISHMENT_WORK_ORDER ||--o{ REFURBISHMENT_STEP : includes
     REFURBISHMENT_WORK_ORDER ||--o{ REFURBISHMENT_ITEM : uses
     DEVICE ||--o{ DISPOSITION : "disposed via"
-    DEVICE ||--o{ AI_RECOMMENDATION : "receives"
     AI_RECOMMENDATION ||--o{ AI_FEEDBACK : "rated by"
     DEVICE ||--o{ ATTACHMENT : has
     USER ||--o{ NOTIFICATION : receives
@@ -203,6 +203,15 @@ stateDiagram-v2
 
 **(Decision)** The original specification listed recovery statuses *Initiated / In Transit / Received*. The prototype uses a record status (*In progress → Completed*) plus an outcome instead: *In progress* covers initiated and in transit, and completing with a successful outcome is the point of receipt. Devices registered directly as `RECOVERED` (already in hand) have no recovery record.
 
+**Condition assessment and final decision (Phase 6).** `assessments.services` and `ai_engine.services` own the next steps:
+
+1. A Device Assessor starts a **Draft** assessment for a `RECOVERED` device (one draft per device). Every field may be filled in gradually; evidence files can be attached while it is a draft.
+2. **Submit** requires all six condition choices plus the estimated repair cost and a market value above 0 RWF. In one transaction the assessment becomes **Submitted** (immutable), `transition_device(device, ASSESSED, source_type="assessment", source_id=<assessment id>)` runs with the reason "Condition assessment ASS-… submitted.", and the device's condition rating is set from the physical condition (`CRITICAL` maps to `POOR`) through `devices.services.record_condition` (audited).
+3. A user with `ai.request` asks for the **AI recommendation**. It is stored, audited and shown, and **does not touch the device**.
+4. An Operations Manager (`ai.decide`) records the **final decision**: accept the recommendation or override it with a reason. The *human* decision moves the device `ASSESSED → REFURBISHING / READY_FOR_DISPOSITION / UNABLE_TO_REPAIR` via `transition_device(..., source_type="assessment_decision")`. Refurbishment work orders and dispositions themselves are later phases.
+
+Only one submitted assessment can exist per device (partial unique index). The lifecycle has no path back to `RECOVERED`, so re-assessment is not possible yet; if it is added, the earlier assessment stays as history.
+
 **Rules enforced in `transition_device`** (implemented in the Device Management phase):
 
 - Only the transitions above are allowed; unknown statuses and anything else raise `InvalidTransition`, which a view returns as **400** with a reason.
@@ -223,29 +232,52 @@ Added by later lifecycle phases (not yet enforced):
 
 ## 7. AI decision support
 
-A **transparent, rule-based prototype decision-support engine**. No machine-learning model is trained, because there is no real training dataset. The UI and API label it "Prototype rule-based recommendation".
+> The current AI component is an explainable rule-based decision-support engine. Future versions could replace or augment it with a trained machine-learning model when sufficient historical device lifecycle data is available.
 
-**Recommendation types**
+The engine lives in `backend/ai_engine/rules.py`. It is deterministic and versioned (`RULE_VERSION = "rules-v1.0"`): the same assessment always produces the same recommendation, score, confidence and reasons. Every weight and threshold is a named constant in that one module; changing any of them means bumping the version, which is stored with each recommendation. The UI labels the output "AI recommendation — human decision required" and "Explainable rule-based · not machine learning".
 
-1. **Condition** (requested during assessment): suggested rating Excellent/Good/Fair/Poor and a recommended action (no refurbishment / refurbish / unable to repair).
-2. **Pricing & channel** (requested once refurbishment is complete, or straight after assessment if none is needed): a suggested price in RWF and a suggested route (resale via direct/online/dealer, or reallocation to internal/partner use).
+**Input:** the submitted assessment (functionality, physical, screen, battery, cosmetic, accessories, defects, estimated repair cost and market value in RWF).
 
-**How it works**
+**Score (0–100)** — points per finding, summed and clamped to 0–100:
 
-- *Condition score (0–100):* weighted points from physical condition, functionality, screen and battery condition, minus deductions for recorded damage. Score bands map to ratings (≥85 Excellent, ≥65 Good, ≥40 Fair, otherwise Poor).
-- *Price:* if at least 3 confirmed resales exist for the same make/model, the base price is their median sale price. Otherwise it is the admin-maintained `ReferencePrice`. The base is multiplied by a condition factor.
-- *Channel:* compares expected price with refurbishment cost already spent. Low expected margin or poor condition points towards reallocation or dealer sale; good condition with healthy margin points towards direct/online resale.
-- *Confidence (%):* how complete the inputs are, how far the score sits from a band boundary, and whether historical sales or only the reference price backed the estimate.
-- *Explanation:* the factors that drove the result, in plain language, e.g. "Functional, minor scratches, battery fair; refurbishment cost 18,000 RWF is low relative to the expected price."
-- Weights, thresholds and multipliers live in one versioned rules module (`rule_version` is stored on each recommendation), so results can be reproduced.
+| Factor | Points |
+|---|---|
+| Functionality | Fully 30 · Partially 15 · Non-functional 0 |
+| Physical condition | Excellent 20 · Good 16 · Fair 10 · Poor 4 · Critical 0 |
+| Screen | Intact 15 · Minor damage 10 · Major damage 4 · Broken 0 |
+| Battery | Excellent 15 · Good 12 · Fair 7 · Poor 3 · Failed 0 |
+| Cosmetic condition | Excellent 10 · Good 8 · Fair 5 · Poor 2 |
+| Accessories | Complete 5 · Partial 3 · None 0 |
+| Repair economics | repair cost ≤ 25% of value: 5 · ≤ 50%: 2 · otherwise 0 |
+| Defects | −3 per recorded defect, at most −15 |
 
-**Human control**
+A perfect device scores 100.
 
-- A recommendation is stored with `decision = PENDING` and **changes nothing on the device**.
-- The assessor can adopt or change the suggested condition when submitting their own assessment. The submitted assessment is the human decision of record.
-- The Operations Manager **accepts** or **overrides** pricing/channel recommendations. An override requires the chosen values and a written justification. Both actions are audited.
-- Any user who can view recommendations can mark them Helpful / Not Helpful.
-- **Effectiveness metrics:** acceptance vs override rate, helpful rate, and price accuracy (recommended vs actual sale price).
+**Recommendation** — rules applied in order; the first that matches wins:
+
+1. Physical condition *Critical* → **Unable to repair** (confidence 95%).
+2. Repair cost > 60% of market value → **Unable to repair** (uneconomic).
+3. *Non-functional* and score < 35 → **Unable to repair**.
+4. Fully functional, nothing needing repair (screen not major/broken, battery not poor/failed, no defects, repair cost ≤ 10% of value) and score ≥ 75 → **Ready for disposition**.
+5. Otherwise → **Refurbish** (repairable issues at an economic cost, or a working device scoring below 75).
+
+**Confidence** expresses how far the inputs are from the nearest threshold that would change the recommendation: `0.60 + 1.5 × margin`, clamped to 55–95%. It is a rule-based certainty indicator, **not a statistical probability**, and the UI says so.
+
+**Reasons** list each finding in plain language (e.g. "Estimated repair cost is 18,000 RWF; estimated market value is 85,000 RWF (21% of value).") and end with the rule that decided (e.g. "Rule: the device has repairable issues and the repair cost is within 60% of the market value…"). A collapsible table shows the points per factor.
+
+Worked example (from the brief): partially functional, good physical and cosmetic condition, major screen damage, fair battery, partial accessories, repair 18,000 RWF, value 85,000 RWF → score 58, **Refurbish** (rule 5), confidence 95%.
+
+**Recommendation vs human decision**
+
+- `AIRecommendation` stores the AI output (recommendation, score, confidence, reasons, factor points, rule, rule version, who requested it, when) and, in **separate** fields, the human final decision (decision, by, at, reason). An override never overwrites the AI output.
+- One recommendation per submitted assessment. Requesting again returns the existing one (201 first time, then 200), because the input is immutable and the rules deterministic.
+- Only `ai.decide` (Operations Manager) can decide; a reason is required when the decision differs from the recommendation. The decision is write-once.
+- A PostgreSQL trigger makes the AI columns immutable, allows the decision columns to be filled only once, and blocks deletes. CHECK constraints require who/when for every decision and a reason for every override.
+- **Feedback:** users with `ai.feedback` record whether they would *accept* or *override* the recommendation, with an optional comment (one per user, append-only). This, together with the decision outcome (accepted/overridden), is the basis for AI-effectiveness reporting in the analytics phase.
+
+**Limitations.** The weights and thresholds are reasoned defaults, not fitted to Yellow data; market value and repair cost are the assessor's estimates; confidence is not a probability. Pricing and reallocation-channel recommendations (and `ReferencePrice`) are planned for the disposition phase.
+
+**Future machine learning.** Each `AIRecommendation` stores its inputs (via the immutable assessment), the AI output, the human decision and feedback. Once enough devices have completed their lifecycle, this history (with refurbishment costs and sale prices from later phases) is a labelled dataset from which a model could be trained, evaluated against the rule engine, and introduced behind the same API with a new `rule_version`/model identifier, keeping human decisions in control.
 
 ## 8. Audit
 
@@ -255,7 +287,7 @@ A **transparent, rule-based prototype decision-support engine**. No machine-lear
 - Passwords, MFA secrets and session data are never written to the log.
 - Admins browse it at `/admin/audit-log` with filters for user, action, entity, entity ID and date range.
 
-Audited actions: login / logout / failed login / lockout / unlock / session expiry, password change / reset, MFA setup / enable / disable / verify / failure, user and role changes, device created / updated / status changed, recovery recorded / updated / completed (`RECOVERY_CREATED`, `RECOVERY_UPDATED`, `RECOVERY_COMPLETED`), assessment created / modified, work order created / updated / completed, AI recommendation generated / accepted / overridden, feedback given, disposition recorded / confirmed, attachment uploaded, reference price changed.
+Audited actions: login / logout / failed login / lockout / unlock / session expiry, password change / reset, MFA setup / enable / disable / verify / failure, user and role changes, device created / updated / status changed, recovery recorded / updated / completed (`RECOVERY_CREATED`, `RECOVERY_UPDATED`, `RECOVERY_COMPLETED`), assessment created / updated / submitted (`ASSESSMENT_CREATED`, `ASSESSMENT_UPDATED`, `ASSESSMENT_SUBMITTED`), device condition set from an assessment (`DEVICE_UPDATED`), AI recommendation generated (`AI_RECOMMENDATION_GENERATED`), final decision accepted / overridden with reason (`AI_DECISION_MADE`), AI feedback (`AI_FEEDBACK_RECORDED`), work order created / updated / completed, disposition recorded / confirmed, attachment uploaded, reference price changed.
 
 ## 9. API structure
 
@@ -268,10 +300,10 @@ REST, JSON, all under `/api/`. Lists are paginated (`?page=`, 20 per page) and a
 | Users & roles | `GET/POST /api/users/` · `GET/PATCH /api/users/{id}/` · `POST /api/users/{id}/reset-password/` · `POST /api/users/{id}/reset-mfa/` · `POST /api/users/{id}/unlock/` · `GET /api/roles/` · `PATCH /api/roles/{id}/` · `GET /api/permissions/` · `GET /api/login-attempts/` |
 | Devices | `GET/POST /api/devices/` (`?search=&status=&make=&model=&device_type=&condition=&recovered_from=&recovered_to=&page=`) · `GET/PATCH /api/devices/{id}/` · `GET /api/devices/{id}/history/` · `GET/POST /api/devices/{id}/attachments/` · `GET /api/devices/{id}/attachments/{attachment_id}/download/` |
 | Recovery | `GET/POST /api/recoveries/` (`?device=&status=&outcome=&search=&page=`) · `GET/PATCH /api/recoveries/{id}/` (PATCH only while In progress) · `POST /api/recoveries/{id}/complete/` · `GET/POST /api/recoveries/{id}/attachments/`. Read: `device.view`; write: `recovery.manage`. |
-| Assessments | `GET/POST /api/assessments/` · `GET/PATCH /api/assessments/{id}/` |
+| Assessments | `GET/POST /api/assessments/` (`?device=&status=&search=&page=`) · `GET/PATCH /api/assessments/{id}/` (PATCH only while Draft) · `POST /api/assessments/{id}/submit/` · `GET/POST /api/assessments/{id}/attachments/`. Read: `device.view`; write: `assessment.create`. |
 | Refurbishment | `GET/POST /api/work-orders/` · `GET/PATCH /api/work-orders/{id}/` · `POST /api/work-orders/{id}/steps/` · `POST /api/work-orders/{id}/items/` · `POST /api/work-orders/{id}/complete/` · `POST /api/work-orders/{id}/unable-to-repair/` |
 | Dispositions | `GET/POST /api/dispositions/` · `GET /api/dispositions/{id}/` · `POST /api/dispositions/{id}/confirm/` |
-| AI | `POST /api/devices/{id}/ai/condition/` · `POST /api/devices/{id}/ai/pricing/` · `GET /api/ai/recommendations/` · `GET /api/ai/recommendations/{id}/` · `POST /api/ai/recommendations/{id}/accept/` · `POST /api/ai/recommendations/{id}/override/` · `POST /api/ai/recommendations/{id}/feedback/` · `GET/POST/PATCH /api/ai/reference-prices/` |
+| AI | `GET /api/assessments/{id}/ai-recommendation/` (`ai.view`) · `POST /api/assessments/{id}/ai-recommendation/` (`ai.request`) · `POST /api/assessments/{id}/decision/` (`ai.decide`; body `final_decision`, `reason`) · `POST /api/assessments/{id}/ai-feedback/` (`ai.feedback`; body `verdict`, `comment`) · `GET /api/ai-recommendations/` (`ai.view`; `?decision=pending\|decided&recommendation=&outcome=ACCEPTED\|OVERRIDDEN&search=`). Pricing/channel endpoints come with the disposition phase. |
 | Notifications | `GET /api/notifications/` · `GET /api/notifications/unread-count/` · `POST /api/notifications/{id}/read/` · `POST /api/notifications/read-all/` · `POST /api/notifications/announcements/` (admin) |
 | Dashboards & analytics | `GET /api/dashboard/` (content depends on role) · `GET /api/analytics/summary/` · `GET /api/analytics/lifecycle/` · `GET /api/analytics/financials/` · `GET /api/analytics/ai-effectiveness/` · `GET /api/analytics/export/?format=csv` |
 | Audit | `GET /api/audit-logs/` (`?user=&action=&entity_type=&entity_id=&from=&to=`) |

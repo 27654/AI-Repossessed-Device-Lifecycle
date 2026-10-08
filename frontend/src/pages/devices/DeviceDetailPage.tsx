@@ -10,6 +10,7 @@ import { conditionLabel } from '../../config/devices'
 import { Perm } from '../../config/permissions'
 import { deviceApi, errorMessage, type Attachment, type Device, type DeviceStatusChange } from '../../lib/api'
 import { dateTime } from '../../lib/format'
+import DeviceAssessmentPanel from '../assessments/DeviceAssessmentPanel'
 import DeviceRecoveryPanel from '../recovery/DeviceRecoveryPanel'
 
 function History({ entries }: { entries: DeviceStatusChange[] }) {
@@ -144,6 +145,15 @@ export default function DeviceDetailPage() {
           <DeviceRecoveryPanel
             device={device}
             onCompleted={(message) => {
+              setNoticeFor({ deviceId: device.id, text: message })
+              setReloadKey((k) => k + 1)
+            }}
+            onEvidenceAdded={reloadAttachments}
+          />
+
+          <DeviceAssessmentPanel
+            device={device}
+            onLifecycleChange={(message) => {
               setNoticeFor({ deviceId: device.id, text: message })
               setReloadKey((k) => k + 1)
             }}

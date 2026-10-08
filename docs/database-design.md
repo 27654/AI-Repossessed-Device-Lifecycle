@@ -106,6 +106,7 @@ A PostgreSQL trigger rejects `UPDATE` and `DELETE`. Used for the device history 
 |---|---|---|
 | device | FK → Device, `PROTECT` | Every file belongs to a device |
 | recovery | FK → Recovery, nullable, `PROTECT` | Set when the file is evidence for a recovery (same device, checked in the service) |
+| assessment | FK → Assessment, nullable, `PROTECT` | Set when the file is evidence for an assessment (same device, checked in the service) |
 | file | file path | `attachments/YYYY/MM/<uuid4>.<ext>` under `MEDIA_ROOT`; never returned by the API |
 | original_name | varchar(255) | Base name only, sanitised |
 | mime_type | varchar(50) | Detected from the file signature: JPEG, PNG, WebP, PDF |
@@ -114,7 +115,7 @@ A PostgreSQL trigger rejects `UPDATE` and `DELETE`. Used for the device history 
 | uploaded_by | FK → User | |
 | created_at | timestamptz | |
 
-**(Decision)** A lifecycle record links its evidence through a nullable foreign key on Attachment, one per module (`recovery` now; assessment, work order and disposition when those modules are built). This replaces the earlier generic `content_type` / `object_id` idea: real foreign keys give referential integrity and simple queries. All files keep the same upload checks, storage and authenticated download.
+**(Decision)** A lifecycle record links its evidence through a nullable foreign key on Attachment, one per module (`recovery`, `assessment`; work order and disposition when those modules are built). A CHECK constraint allows at most one of these links per file. This replaces the earlier generic `content_type` / `object_id` idea: real foreign keys give referential integrity and simple queries. All files keep the same upload checks, storage and authenticated download.
 
 ---
 
@@ -148,23 +149,38 @@ Evidence photos and documents: Attachment rows with `recovery` set.
 
 **(Decision)** The previous owner stays on Device (`previous_owner_ref`) and is not copied onto Recovery. Completing a successful recovery sets the device's `recovery_date` from `recovered_at`, and fills `recovery_reference` with the recovery's reference if it was empty, through `devices.services.update_device` (audited as a device update).
 
-### ConditionAssessment
+### Assessment (Phase 6)
+A structured condition assessment of a Recovered device.
+
 | Field | Type | Notes |
 |---|---|---|
-| device | FK → Device | |
-| assessor | FK → User | |
-| physical_condition | enum | `EXCELLENT`, `GOOD`, `FAIR`, `POOR` |
-| functionality | enum | `FULLY_FUNCTIONAL`, `PARTIALLY_FUNCTIONAL`, `NON_FUNCTIONAL` |
-| screen_condition | enum | `NO_DAMAGE`, `MINOR_SCRATCHES`, `CRACKED`, `NOT_WORKING`, `NOT_APPLICABLE` |
-| battery_condition | enum | `GOOD`, `FAIR`, `POOR`, `NOT_WORKING`, `NOT_APPLICABLE` |
-| damage_notes | text | |
-| overall_rating | enum | `EXCELLENT`, `GOOD`, `FAIR`, `POOR` (human decision) |
-| conclusion | text | |
-| recommended_action | enum | `NO_REFURBISHMENT_NEEDED`, `REFURBISH`, `UNABLE_TO_REPAIR` |
-| ai_recommendation | FK → AIRecommendation, nullable | The suggestion the assessor saw, if any |
-| assessed_at | timestamptz | |
+| reference | varchar(20), unique | `ASS-<year>-<number>`, from the `assessments_assessment_reference_seq` sequence |
+| device | FK → Device, `PROTECT` | |
+| assessor | FK → User, `PROTECT` | The signed-in Device Assessor who started it |
+| assessment_date | date | Defaults to today (Africa/Kigali); not in the future |
+| physical_condition | enum, blank in draft | `EXCELLENT`, `GOOD`, `FAIR`, `POOR`, `CRITICAL` |
+| cosmetic_condition | enum, blank in draft | `EXCELLENT`, `GOOD`, `FAIR`, `POOR` |
+| screen_condition | enum, blank in draft | `INTACT`, `MINOR_DAMAGE`, `MAJOR_DAMAGE`, `BROKEN` |
+| battery_condition | enum, blank in draft | `EXCELLENT`, `GOOD`, `FAIR`, `POOR`, `FAILED` |
+| functional_status | enum, blank in draft | `FULLY_FUNCTIONAL`, `PARTIALLY_FUNCTIONAL`, `NON_FUNCTIONAL` |
+| accessories_condition | enum, blank in draft | `COMPLETE`, `PARTIAL`, `NONE` |
+| defects | varchar[] (PostgreSQL array) | **(Decision)** checklist codes instead of free text: `CAMERA_FAULT`, `CHARGING_PORT_FAULT`, `SPEAKER_OR_MICROPHONE_FAULT`, `BUTTON_FAULT`, `NETWORK_OR_SIM_FAULT`, `SOFTWARE_ISSUE`, `ACCOUNT_OR_DEVICE_LOCK`, `WATER_DAMAGE`, `HOUSING_DAMAGE`, `OTHER`; de-duplicated and sorted |
+| assessment_notes | text | |
+| estimated_repair_cost_rwf | bigint (whole RWF), nullable in draft | ≥ 0, at most 100,000,000 |
+| estimated_market_value_rwf | bigint (whole RWF), nullable in draft | > 0 to submit, at most 100,000,000 |
+| status | enum | `DRAFT` (editable) → `SUBMITTED` (immutable) |
+| submitted_at | timestamptz, nullable | |
+| created_at / updated_at | timestamptz | |
 
-Assessments are never overwritten. Modifying one is audited with before/after values. A re-assessment creates a new row, so the assessment history is kept.
+Constraints:
+- CHECK on every enum column and on the defect codes (`defects <@ ARRAY[...]`).
+- A `SUBMITTED` row must have every condition field, the repair cost, a market value > 0 and `submitted_at` (CHECK).
+- At most one `DRAFT` and at most one `SUBMITTED` assessment per device (partial unique indexes).
+- A PostgreSQL trigger rejects `UPDATE` of a submitted row and `DELETE` of any row.
+
+Evidence: Attachment rows with `assessment` set (uploads allowed while Draft; files stay downloadable afterwards).
+
+**(Decision)** The device's 4-level `current_condition` is set on submission from `physical_condition` (`CRITICAL` → `POOR`). There is no separate "overall rating" field; the final route (refurbish / ready / unable to repair) is the human decision recorded on `AIRecommendation`.
 
 ### RefurbishmentWorkOrder
 | Field | Type | Notes |
@@ -222,39 +238,40 @@ Only one `CONFIRMED` disposition per device (partial unique index). Cancelled ro
 
 ## AI decision support
 
-### AIRecommendation
+### AIRecommendation (Phase 6)
+The rule engine's output for one submitted assessment, plus the human final decision in separate columns.
+
 | Field | Type | Notes |
 |---|---|---|
-| device | FK → Device | |
-| recommendation_type | enum | `CONDITION`, `PRICING_CHANNEL` |
-| input_snapshot | jsonb | Exact inputs used, for reproducibility |
-| recommended_condition | enum, nullable | CONDITION type |
-| recommended_action | enum, nullable | CONDITION type |
-| recommended_price | bigint (RWF), nullable | PRICING_CHANNEL type |
-| recommended_decision_type / recommended_channel | enum, nullable | PRICING_CHANNEL type |
-| confidence | smallint | 0–100 |
-| explanation | text | Plain-language reasoning |
-| factors | jsonb | Per-factor contributions, for display |
-| price_basis | enum, nullable | `HISTORICAL_SALES`, `REFERENCE_PRICE` |
-| rule_version | varchar(20) | Engine rules version |
+| assessment | OneToOne → Assessment, `PROTECT` | One recommendation per submitted assessment |
+| recommendation | enum | `REFURBISH`, `READY_FOR_DISPOSITION`, `UNABLE_TO_REPAIR` |
+| score | smallint | 0–100 (CHECK) |
+| confidence | numeric(3,2) | 0–1 (CHECK); rule-based certainty, not a probability |
+| reasons | jsonb | Plain-language reasons, ending with the deciding rule |
+| factors | jsonb | Points per factor (score breakdown) |
+| rule | varchar(40) | Which rule decided (e.g. `economic_repair`) |
+| rule_version | varchar(20) | e.g. `rules-v1.0` |
 | requested_by | FK → User | |
-| decision | enum | `PENDING`, `ACCEPTED`, `OVERRIDDEN` |
-| decided_by | FK → User, nullable | |
-| decided_at | timestamptz, nullable | |
-| override_values | jsonb, nullable | The human-chosen values |
-| override_justification | text | Required when `OVERRIDDEN` |
+| generated_at | timestamptz | indexed |
+| final_decision | enum, blank until decided | Same choices as `recommendation` |
+| final_decision_by | FK → User, nullable | `ai.decide` holder |
+| final_decision_at | timestamptz, nullable | |
+| final_decision_reason | text | Required when `final_decision ≠ recommendation` (CHECK) |
 
-### AIFeedback
+Constraints: a decision always has who and when (CHECK). A PostgreSQL trigger keeps the AI columns immutable, allows the decision columns to be written only while `final_decision` is empty, and blocks deletes. *Accepted / overridden* is derived (`final_decision = recommendation`), not stored.
+
+### AIFeedback (Phase 6)
 | Field | Type | Notes |
 |---|---|---|
-| recommendation | FK → AIRecommendation | |
+| recommendation | FK → AIRecommendation, `PROTECT` | |
 | user | FK → User | |
-| helpful | bool | |
-| comment | varchar(500) | |
+| verdict | enum | `ACCEPTED` (would accept), `OVERRIDDEN` (would override) |
+| comment | varchar(500) | Optional |
+| created_at | timestamptz | |
 
-Unique on (`recommendation`, `user`).
+Unique on (`recommendation`, `user`). Append-only (PostgreSQL trigger).
 
-### ReferencePrice
+### ReferencePrice (planned: pricing / disposition phase)
 | Field | Type | Notes |
 |---|---|---|
 | make, model | varchar | Unique together |

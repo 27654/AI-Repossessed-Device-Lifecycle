@@ -22,3 +22,6 @@ export function toLocalInput(value: string | Date) {
 
 // <input type="datetime-local"> value -> ISO timestamp with time zone for the API.
 export const fromLocalInput = (value: string) => new Date(value).toISOString()
+
+// Whole Rwandan francs, e.g. "18,000 RWF".
+export const rwf = (amount: number) => `${amount.toLocaleString('en-US')} RWF`

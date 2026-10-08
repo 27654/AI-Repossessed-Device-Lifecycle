@@ -3,7 +3,7 @@
 Final-year academic prototype for **Yellow (Rwanda)**. It tracks repossessed devices through
 **Recovery → Condition Assessment → Refurbishment → Reallocation/Resale**, with role-based access control, a full audit trail, and transparent rule-based AI decision support. The AI only recommends; humans decide.
 
-> **Status:** authentication, RBAC, audit, device management and recovery are implemented. The remaining lifecycle modules are added phase by phase. See [docs/architecture.md](docs/architecture.md).
+> **Status:** authentication, RBAC, audit, device management, recovery, condition assessment and AI decision support are implemented. The remaining lifecycle modules are added phase by phase. See [docs/architecture.md](docs/architecture.md).
 
 ## Tech stack
 
@@ -132,3 +132,14 @@ cd frontend && npm run lint                      # lint
 - Previous device owners are recorded only as a pseudonymous Yellow account reference, never by name or ID number.
 - The Django admin (`/admin/`) uses password-only login without MFA or audit, so it is mounted only when `DJANGO_DEBUG=true`.
 - The AI component is a **prototype rule-based decision-support engine**, not a trained machine-learning model. Its recommendations never change a device's status on their own.
+
+## Condition assessment and AI decision support
+
+1. A **Device Assessor** opens a *Recovered* device, clicks **Start Assessment**, records the condition checklist, defects and RWF estimates (draft), attaches evidence, and submits. The device moves to *Assessed*.
+2. A user with `ai.request` clicks **Request AI Recommendation**. The rule engine returns Refurbish / Ready for disposition / Unable to repair with a score (0–100), a confidence, the reasons and the rule version. Nothing on the device changes.
+3. An **Operations Manager** reviews it on the device page (or at **AI Recommendations**, filter *Awaiting decision*) and makes the **final decision**: accept, or override with a reason. That human decision moves the device to *Refurbishing*, *Ready for disposition* or *Unable to repair*.
+4. Assessors, refurbishment staff, sales officers and managers can record feedback (would accept / would override).
+
+The current AI component is an explainable rule-based decision-support engine. Future versions could replace or augment it with a trained machine-learning model when sufficient historical device lifecycle data is available.
+
+Scoring rules, thresholds and limitations: [docs/architecture.md §7](docs/architecture.md#7-ai-decision-support).

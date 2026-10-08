@@ -1,21 +1,9 @@
 from rest_framework import serializers
 
 from devices.models import Device
-from devices.serializers import AttachmentSerializer, UserLabelField
+from devices.serializers import AttachmentSerializer, DeviceLabelField, UserLabelField
 
 from .models import Recovery
-
-
-class DeviceLabelField(serializers.Field):
-    def to_representation(self, device):
-        return {
-            "id": device.pk,
-            "device_code": device.device_code,
-            "make": device.make,
-            "model": device.model,
-            "status": device.status,
-            "status_label": device.get_status_display(),
-        }
 
 
 class RecoverySerializer(serializers.ModelSerializer):
