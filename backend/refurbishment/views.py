@@ -36,7 +36,7 @@ def work_order_queryset():
         Prefetch("items", queryset=RefurbishmentItem.objects.select_related("created_by")),
         Prefetch(
             "attachments",
-            queryset=Attachment.objects.select_related("uploaded_by", "recovery", "assessment", "refurbishment"),
+            queryset=Attachment.objects.select_related("uploaded_by", "recovery", "assessment", "refurbishment", "disposition"),
         ),
     )
 
@@ -212,7 +212,7 @@ class WorkOrderAttachmentListCreateView(generics.ListCreateAPIView):
         return get_object_or_404(RefurbishmentWorkOrder.objects.select_related("device"), pk=self.kwargs["pk"])
 
     def get_queryset(self):
-        return self.get_work_order().attachments.select_related("uploaded_by", "recovery", "assessment", "refurbishment")
+        return self.get_work_order().attachments.select_related("uploaded_by", "recovery", "assessment", "refurbishment", "disposition")
 
     def perform_create(self, serializer):
         work_order = self.get_work_order()

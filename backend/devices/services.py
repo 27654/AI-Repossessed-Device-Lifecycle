@@ -221,14 +221,16 @@ def add_attachment(
     recovery=None,
     assessment=None,
     refurbishment=None,
+    disposition=None,
     request=None,
 ):
     """Store an already validated upload and audit it (file metadata only).
 
-    `recovery`, `assessment` or `refurbishment` (a work order) optionally links
-    the file as evidence for that record, which must belong to the same device.
+    `recovery`, `assessment`, `refurbishment` (a work order) or `disposition`
+    optionally links the file as evidence for that record, which must belong
+    to the same device.
     """
-    linked = [r for r in (recovery, assessment, refurbishment) if r is not None]
+    linked = [r for r in (recovery, assessment, refurbishment, disposition) if r is not None]
     if len(linked) > 1:
         raise ValidationError({"detail": "A file can be evidence for one record only."})
     record = linked[0] if linked else None
@@ -239,6 +241,7 @@ def add_attachment(
         recovery=recovery,
         assessment=assessment,
         refurbishment=refurbishment,
+        disposition=disposition,
         original_name=original_name,
         mime_type=mime_type,
         size_bytes=upload.size,
@@ -264,6 +267,11 @@ def add_attachment(
             **(
                 {"work_order_id": refurbishment.pk, "work_order_reference": refurbishment.reference}
                 if refurbishment
+                else {}
+            ),
+            **(
+                {"disposition_id": disposition.pk, "disposition_reference": disposition.reference}
+                if disposition
                 else {}
             ),
         },

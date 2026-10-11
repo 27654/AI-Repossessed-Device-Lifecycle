@@ -11,6 +11,7 @@ import { Perm } from '../../config/permissions'
 import { deviceApi, errorMessage, type Attachment, type Device, type DeviceStatusChange } from '../../lib/api'
 import { dateTime } from '../../lib/format'
 import DeviceAssessmentPanel from '../assessments/DeviceAssessmentPanel'
+import DeviceDispositionPanel from '../dispositions/DeviceDispositionPanel'
 import DeviceRecoveryPanel from '../recovery/DeviceRecoveryPanel'
 import DeviceRefurbishmentPanel from '../refurbishment/DeviceRefurbishmentPanel'
 
@@ -162,6 +163,15 @@ export default function DeviceDetailPage() {
           />
 
           <DeviceRefurbishmentPanel
+            device={device}
+            onLifecycleChange={(message) => {
+              setNoticeFor({ deviceId: device.id, text: message })
+              setReloadKey((k) => k + 1)
+            }}
+            onEvidenceAdded={reloadAttachments}
+          />
+
+          <DeviceDispositionPanel
             device={device}
             onLifecycleChange={(message) => {
               setNoticeFor({ deviceId: device.id, text: message })

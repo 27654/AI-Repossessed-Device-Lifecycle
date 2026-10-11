@@ -199,6 +199,8 @@ class AttachmentSerializer(serializers.ModelSerializer):
     assessment_reference = serializers.CharField(source="assessment.reference", read_only=True, default=None)
     # Set when the file is evidence for a refurbishment work order.
     refurbishment_reference = serializers.CharField(source="refurbishment.reference", read_only=True, default=None)
+    # Set when the file is evidence for a disposition (reallocation or resale).
+    disposition_reference = serializers.CharField(source="disposition.reference", read_only=True, default=None)
 
     class Meta:
         model = Attachment
@@ -218,9 +220,12 @@ class AttachmentSerializer(serializers.ModelSerializer):
             "assessment_reference",
             "refurbishment",
             "refurbishment_reference",
+            "disposition",
+            "disposition_reference",
         ]
         read_only_fields = [
-            "original_name", "mime_type", "size_bytes", "created_at", "recovery", "assessment", "refurbishment"
+            "original_name", "mime_type", "size_bytes", "created_at", "recovery", "assessment", "refurbishment",
+            "disposition",
         ]
 
     def validate_file(self, upload):

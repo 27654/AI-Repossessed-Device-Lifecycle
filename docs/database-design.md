@@ -108,6 +108,7 @@ A PostgreSQL trigger rejects `UPDATE` and `DELETE`. Used for the device history 
 | recovery | FK → Recovery, nullable, `PROTECT` | Set when the file is evidence for a recovery (same device, checked in the service) |
 | assessment | FK → Assessment, nullable, `PROTECT` | Set when the file is evidence for an assessment (same device, checked in the service) |
 | refurbishment | FK → RefurbishmentWorkOrder, nullable, `PROTECT` | Set when the file is evidence for a work order (same device, checked in the service) |
+| disposition | FK → Disposition, nullable, `PROTECT` | Set when the file is evidence for a disposition (same device, checked in the service) |
 | file | file path | `attachments/YYYY/MM/<uuid4>.<ext>` under `MEDIA_ROOT`; never returned by the API |
 | original_name | varchar(255) | Base name only, sanitised |
 | mime_type | varchar(50) | Detected from the file signature: JPEG, PNG, WebP, PDF |
@@ -116,7 +117,7 @@ A PostgreSQL trigger rejects `UPDATE` and `DELETE`. Used for the device history 
 | uploaded_by | FK → User | |
 | created_at | timestamptz | |
 
-**(Decision)** A lifecycle record links its evidence through a nullable foreign key on Attachment, one per module (`recovery`, `assessment`, `refurbishment`; disposition when that module is built). A CHECK constraint (`attachment_single_lifecycle_link_v2`) allows at most one of these links per file. This replaces the earlier generic `content_type` / `object_id` idea: real foreign keys give referential integrity and simple queries. All files keep the same upload checks, storage and authenticated download.
+**(Decision)** A lifecycle record links its evidence through a nullable foreign key on Attachment, one per module (`recovery`, `assessment`, `refurbishment`, `disposition`). A CHECK constraint (`attachment_single_lifecycle_link_v3`) allows at most one of these links per file. This replaces the earlier generic `content_type` / `object_id` idea: real foreign keys give referential integrity and simple queries. All files keep the same upload checks, storage and authenticated download.
 
 ---
 
@@ -241,24 +242,32 @@ A PostgreSQL trigger rejects changes to items of a closed work order and all del
 
 Evidence: Attachment rows with `refurbishment` set (uploads while the work order is active; files stay downloadable afterwards).
 
-### Disposition
+### Disposition (Phase 8)
+The final reallocation or resale of a device that is `READY_FOR_DISPOSITION`.
+
 | Field | Type | Notes |
 |---|---|---|
-| device | FK → Device | |
-| decision_type | enum | `REALLOCATION`, `RESALE` |
-| channel | enum | Reallocation: `INTERNAL_USE`, `PARTNER`, `OTHER_APPROVED`. Resale: `DIRECT`, `ONLINE`, `DEALER`. Checked against decision_type. |
-| recipient_name | varchar(150) | Buyer or recipient |
-| recipient_contact | varchar(100) | Shown only to roles with `disposition.create` or `analytics.view` |
-| price | bigint (RWF), nullable | Required for resale. Nullable for reallocation. |
-| disposition_date | date | |
-| reason | text | |
-| ai_recommendation | FK → AIRecommendation, nullable | The pricing/channel recommendation in force |
-| status | enum | `PENDING_CONFIRMATION`, `CONFIRMED`, `CANCELLED` |
-| confirmation_reference | varchar(60) | Receipt / handover reference |
-| recorded_by / confirmed_by | FK → User | |
-| confirmed_at | timestamptz, nullable | Confirming moves the device to `REALLOCATED`/`RESOLD` |
+| reference | varchar(20), unique | `DSP-<year>-<number>`, from the `dispositions_disposition_reference_seq` sequence |
+| device | FK → Device, `PROTECT` | |
+| disposition_type | enum | `REALLOCATION`, `RESALE` |
+| status | enum | `DRAFT` (editable) → `CONFIRMED` (immutable); indexed |
+| disposition_date | date | Defaults to today (Africa/Kigali); not in the future; indexed |
+| responsible_user | FK → User | The officer who drafted it |
+| destination | varchar(150) | Reallocation only (required): receiving department, branch or partner |
+| recipient_reference | varchar(60) | Reallocation only (optional): pseudonymous reference, e.g. an employee ID |
+| sale_price_rwf | bigint (whole RWF), nullable | Resale only (required): **(Decision)** > 0; at most 100,000,000 via the API |
+| buyer_reference | varchar(60) | Resale only (required): pseudonymous reference |
+| notes | text | |
+| confirmed_by / confirmed_at | FK → User / timestamptz, nullable | Set on confirmation |
+| created_at / updated_at | timestamptz | |
 
-Only one `CONFIRMED` disposition per device (partial unique index). Cancelled rows are kept as history.
+Constraints:
+- CHECK `disposition_fields_match_type`: a resale has a price > 0 and a buyer reference and no destination/recipient; a reallocation has a destination and no price/buyer.
+- CHECK: a `CONFIRMED` row has `confirmed_by` and `confirmed_at`, a `DRAFT` row has neither.
+- At most one `DRAFT` and at most one `CONFIRMED` disposition per device (partial unique indexes).
+- A PostgreSQL trigger rejects `UPDATE` of a confirmed row and `DELETE` of any row.
+
+Buyer and recipient references must match `^[A-Za-z0-9][A-Za-z0-9-_/]{2,59}$` (no spaces), which keeps names and ID numbers out. Evidence: Attachment rows with `disposition` set (uploads while Draft; files stay downloadable afterwards). There is no sales channel or pricing recommendation yet (future work).
 
 ---
 

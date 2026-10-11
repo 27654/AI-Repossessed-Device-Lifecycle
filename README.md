@@ -3,7 +3,7 @@
 Final-year academic prototype for **Yellow (Rwanda)**. It tracks repossessed devices through
 **Recovery → Condition Assessment → Refurbishment → Reallocation/Resale**, with role-based access control, a full audit trail, and transparent rule-based AI decision support. The AI only recommends; humans decide.
 
-> **Status:** authentication, RBAC, audit, device management, recovery, condition assessment, AI decision support and refurbishment are implemented. Reallocation/resale (dispositions), pricing/channel recommendations, notifications and analytics are future phases. See [docs/architecture.md](docs/architecture.md).
+> **Status:** the full device lifecycle is implemented — authentication, RBAC, audit, device management, recovery, condition assessment, AI decision support, refurbishment and reallocation/resale (dispositions). Pricing/channel recommendations, notifications, dashboards and analytics are future phases. See [docs/architecture.md](docs/architecture.md).
 
 ## Tech stack
 
@@ -152,4 +152,13 @@ Scoring rules, thresholds and limitations: [docs/architecture.md §7](docs/archi
 4. **Complete refurbishment**: needs a work summary, the labour cost, every step finished or skipped, and a completed **Functional test** and **Quality check**. The actual cost (parts + labour) is calculated and the device moves to *Ready for disposition*.
 5. If the device cannot be fixed, **Unable to repair** (reason required) closes the work order and moves the device to *Unable to repair*. **Cancel** closes a work order opened by mistake and leaves the device in refurbishment.
 
-Closed work orders, steps and parts are kept as read-only history. Reallocation and resale of ready devices are a future phase.
+Closed work orders, steps and parts are kept as read-only history.
+
+## Reallocation and resale (dispositions)
+
+1. A device that is *Ready for disposition* appears under **Dispositions**. A **Reallocation/Sales Officer** opens it and clicks **Create disposition**.
+2. Choose **Reallocation** (destination department/branch/partner, optional recipient reference) or **Resale** (sale price in RWF, buyer reference). Buyers and recipients are recorded by reference only — never names or ID numbers.
+3. The draft can be edited and given evidence (receipt, handover form). It does not change the device.
+4. **Confirm** finalises it: the device moves to *Reallocated* or *Resold*, the move appears in the lifecycle history, and the disposition becomes a permanent, read-only record.
+
+Other roles (including the Operations Manager) can view dispositions; only roles with `disposition.create` can draft and confirm them.

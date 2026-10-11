@@ -13,7 +13,7 @@ urlpatterns = [
     path("api/", include("assessments.urls")),
     path("api/", include("ai_engine.urls")),
     path("api/", include("refurbishment.urls")),
-    # Further lifecycle module routes (dispositions, ...) are added phase by phase.
+    path("api/", include("dispositions.urls")),
 ]
 
 if settings.DEBUG:

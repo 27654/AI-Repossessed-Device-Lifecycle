@@ -71,7 +71,7 @@ This keeps every state change auditable and consistent no matter which endpoint 
 | RefurbishmentWorkOrder | Repair job (`REF-YYYY-NNNNN`) for a Refurbishing device: Open → In progress → Completed (repaired / unable to repair) or Cancelled |
 | RefurbishmentStep | Work and checks on a work order (diagnosis, cleaning, screen repair, … functional test, quality check) with status and timestamps |
 | RefurbishmentItem | Parts/materials used: quantity × unit cost (whole RWF) |
-| Disposition | Final reallocation or resale |
+| Disposition | Final reallocation or resale (`DSP-YYYY-NNNNN`): Draft → Confirmed; buyer/recipient by pseudonymous reference only |
 | AIRecommendation | The rule engine's recommendation for one submitted assessment, and (separately) the human final decision |
 | AIFeedback | One staff member's verdict on a recommendation (would accept / would override) with an optional comment |
 | ReferencePrice | *(planned, pricing phase)* Admin-maintained base price per make/model |
@@ -157,6 +157,8 @@ The Device is the hub. Lifecycle records hang off it and are never overwritten, 
 | `audit.view` | | | | | | ✓ |
 | `config.manage` (reference prices, settings) | | | | | | ✓ |
 
+**(Decision, Phase 8)** Only the Reallocation/Sales Officer holds `disposition.create`, so only that role drafts and confirms dispositions; the Operations Manager and other roles see them read-only (`device.view`). An administrator can grant `disposition.create` to another role through role management.
+
 Every role can view and edit its own profile and read its own notifications. **(Decision)** The System Administrator manages the system but does not perform lifecycle operations, which keeps duties separate.
 
 ---
@@ -208,7 +210,7 @@ stateDiagram-v2
 1. A Device Assessor starts a **Draft** assessment for a `RECOVERED` device (one draft per device). Every field may be filled in gradually; evidence files can be attached while it is a draft.
 2. **Submit** requires all six condition choices plus the estimated repair cost and a market value above 0 RWF. In one transaction the assessment becomes **Submitted** (immutable), `transition_device(device, ASSESSED, source_type="assessment", source_id=<assessment id>)` runs with the reason "Condition assessment ASS-… submitted.", and the device's condition rating is set from the physical condition (`CRITICAL` maps to `POOR`) through `devices.services.record_condition` (audited).
 3. A user with `ai.request` asks for the **AI recommendation**. It is stored, audited and shown, and **does not touch the device**.
-4. An Operations Manager (`ai.decide`) records the **final decision**: accept the recommendation or override it with a reason. The *human* decision moves the device `ASSESSED → REFURBISHING / READY_FOR_DISPOSITION / UNABLE_TO_REPAIR` via `transition_device(..., source_type="assessment_decision")`. Refurbishment work orders follow in Phase 7 (below); dispositions are a later phase.
+4. An Operations Manager (`ai.decide`) records the **final decision**: accept the recommendation or override it with a reason. The *human* decision moves the device `ASSESSED → REFURBISHING / READY_FOR_DISPOSITION / UNABLE_TO_REPAIR` via `transition_device(..., source_type="assessment_decision")`. Refurbishment work orders (Phase 7) and dispositions (Phase 8) follow below.
 
 Only one submitted assessment can exist per device (partial unique index). The lifecycle has no path back to `RECOVERED`, so re-assessment is not possible yet; if it is added, the earlier assessment stays as history.
 
@@ -223,6 +225,13 @@ Only one submitted assessment can exist per device (partial unique index). The l
 
 Closed work orders, their steps and parts are history: service checks plus PostgreSQL triggers reject changes and deletes. The AI never creates, starts or completes a work order.
 
+**Reallocation and resale (Phase 8).** `dispositions.services` owns the final step:
+
+1. A Reallocation/Sales Officer (`disposition.create`) drafts a **disposition** for a `READY_FOR_DISPOSITION` device (one draft per device). Type **Reallocation** needs a destination (department, branch or partner) and optionally a recipient reference; type **Resale** needs a sale price (> 0, whole RWF) and a buyer reference. Fields of the other type are rejected; switching type clears the old type's fields. Buyers and recipients are recorded only by pseudonymous reference (letters, digits, `-`, `_`, `/`; no spaces), never by name or ID number.
+2. The draft can be edited and given evidence (receipt, handover form). It never changes the device.
+3. **Confirm** (signed-in, active human only) locks the disposition row; in one transaction it becomes `CONFIRMED` and `transition_device(device, REALLOCATED or RESOLD, source_type="disposition", source_id=<id>)` runs.
+4. At most one confirmed disposition per device (partial unique index). Confirmed dispositions are immutable and no disposition can be deleted (PostgreSQL trigger). No AI code path creates or confirms a disposition.
+
 **Rules enforced in `transition_device`** (implemented in the Device Management phase):
 
 - Only the transitions above are allowed; unknown statuses and anything else raise `InvalidTransition`, which a view returns as **400** with a reason.
@@ -234,9 +243,7 @@ Enforced by the lifecycle services (not by `transition_device` itself, which onl
 
 - `READY_FOR_DISPOSITION` is reached only through a human final decision on a submitted assessment (Phase 6) or a completed, repaired work order (Phase 7).
 
-Added by a later phase (not yet enforced):
-
-- A device cannot be disposed of unless it is `READY_FOR_DISPOSITION`, and it can have only one confirmed disposition.
+- A device is disposed of (`REALLOCATED`/`RESOLD`) only by confirming a disposition while it is `READY_FOR_DISPOSITION`, and it can have only one confirmed disposition (Phase 8).
 
 **Device identification.** Each device gets a `device_code` (`YRW-<year>-<number>`) from a PostgreSQL sequence, so concurrent registrations never collide. A device needs an IMEI (15 digits, Luhn-checked) or a serial number (stored upper-case, compared case-insensitively); both are unique when present. The previous owner is stored only as a pseudonymous Yellow account reference (letters, digits, `-_/`, no spaces), which keeps names and national IDs out.
 
@@ -289,7 +296,7 @@ Worked example (from the brief): partially functional, good physical and cosmeti
 - A PostgreSQL trigger makes the AI columns immutable, allows the decision columns to be filled only once, and blocks deletes. CHECK constraints require who/when for every decision and a reason for every override.
 - **Feedback:** users with `ai.feedback` record whether they would *accept* or *override* the recommendation, with an optional comment (one per user, append-only). This, together with the decision outcome (accepted/overridden), is the basis for AI-effectiveness reporting in the analytics phase.
 
-**Limitations.** The weights and thresholds are reasoned defaults, not fitted to Yellow data; market value and repair cost are the assessor's estimates; confidence is not a probability. Pricing and reallocation-channel recommendations (and `ReferencePrice`) are planned for the disposition phase.
+**Limitations.** The weights and thresholds are reasoned defaults, not fitted to Yellow data; market value and repair cost are the assessor's estimates; confidence is not a probability. Pricing and reallocation-channel recommendations (and `ReferencePrice`) are not implemented: dispositions (Phase 8) record the human-chosen price and destination, and AI pricing remains future work.
 
 **Future machine learning.** Each `AIRecommendation` stores its inputs (via the immutable assessment), the AI output, the human decision and feedback. Once enough devices have completed their lifecycle, this history (with refurbishment costs and sale prices from later phases) is a labelled dataset from which a model could be trained, evaluated against the rule engine, and introduced behind the same API with a new `rule_version`/model identifier, keeping human decisions in control.
 
@@ -301,7 +308,7 @@ Worked example (from the brief): partially functional, good physical and cosmeti
 - Passwords, MFA secrets and session data are never written to the log.
 - Admins browse it at `/admin/audit-log` with filters for user, action, entity, entity ID and date range.
 
-Audited actions: login / logout / failed login / lockout / unlock / session expiry, password change / reset, MFA setup / enable / disable / verify / failure, user and role changes, device created / updated / status changed, recovery recorded / updated / completed (`RECOVERY_CREATED`, `RECOVERY_UPDATED`, `RECOVERY_COMPLETED`), assessment created / updated / submitted (`ASSESSMENT_CREATED`, `ASSESSMENT_UPDATED`, `ASSESSMENT_SUBMITTED`), device condition set from an assessment (`DEVICE_UPDATED`), AI recommendation generated (`AI_RECOMMENDATION_GENERATED`), final decision accepted / overridden with reason (`AI_DECISION_MADE`), AI feedback (`AI_FEEDBACK_RECORDED`), work order created / updated / started / completed / unable to repair / cancelled (`REFURBISHMENT_CREATED`, `REFURBISHMENT_UPDATED`, `REFURBISHMENT_STARTED`, `REFURBISHMENT_COMPLETED`, `REFURBISHMENT_UNABLE_TO_REPAIR`, `REFURBISHMENT_CANCELLED`), refurbishment steps and parts added / updated (`REFURBISHMENT_STEP_CREATED`, `REFURBISHMENT_STEP_UPDATED`, `REFURBISHMENT_ITEM_CREATED`, `REFURBISHMENT_ITEM_UPDATED`), disposition recorded / confirmed, attachment uploaded, reference price changed.
+Audited actions: login / logout / failed login / lockout / unlock / session expiry, password change / reset, MFA setup / enable / disable / verify / failure, user and role changes, device created / updated / status changed, recovery recorded / updated / completed (`RECOVERY_CREATED`, `RECOVERY_UPDATED`, `RECOVERY_COMPLETED`), assessment created / updated / submitted (`ASSESSMENT_CREATED`, `ASSESSMENT_UPDATED`, `ASSESSMENT_SUBMITTED`), device condition set from an assessment (`DEVICE_UPDATED`), AI recommendation generated (`AI_RECOMMENDATION_GENERATED`), final decision accepted / overridden with reason (`AI_DECISION_MADE`), AI feedback (`AI_FEEDBACK_RECORDED`), work order created / updated / started / completed / unable to repair / cancelled (`REFURBISHMENT_CREATED`, `REFURBISHMENT_UPDATED`, `REFURBISHMENT_STARTED`, `REFURBISHMENT_COMPLETED`, `REFURBISHMENT_UNABLE_TO_REPAIR`, `REFURBISHMENT_CANCELLED`), refurbishment steps and parts added / updated (`REFURBISHMENT_STEP_CREATED`, `REFURBISHMENT_STEP_UPDATED`, `REFURBISHMENT_ITEM_CREATED`, `REFURBISHMENT_ITEM_UPDATED`), disposition drafted / updated / confirmed (`DISPOSITION_CREATED`, `DISPOSITION_UPDATED`, `DISPOSITION_CONFIRMED`; confirmation also writes `DEVICE_STATUS_CHANGED`), attachment uploaded (`ATTACHMENT_UPLOADED`, with the linked record's reference). Reference-price changes are audited when pricing is built.
 
 ## 9. API structure
 
@@ -316,8 +323,8 @@ REST, JSON, all under `/api/`. Lists are paginated (`?page=`, 20 per page) and a
 | Recovery | `GET/POST /api/recoveries/` (`?device=&status=&outcome=&search=&page=`) · `GET/PATCH /api/recoveries/{id}/` (PATCH only while In progress) · `POST /api/recoveries/{id}/complete/` · `GET/POST /api/recoveries/{id}/attachments/`. Read: `device.view`; write: `recovery.manage`. |
 | Assessments | `GET/POST /api/assessments/` (`?device=&status=&search=&page=`) · `GET/PATCH /api/assessments/{id}/` (PATCH only while Draft) · `POST /api/assessments/{id}/submit/` · `GET/POST /api/assessments/{id}/attachments/`. Read: `device.view`; write: `assessment.create`. |
 | Refurbishment | `GET/POST /api/refurbishments/` (`?device=&status=OPEN\|IN_PROGRESS\|COMPLETED\|CANCELLED\|ACTIVE&assigned_to=<id>\|me&search=&page=`) · `GET/PATCH /api/refurbishments/{id}/` (PATCH only while active) · `POST /api/refurbishments/{id}/start/` · `POST /api/refurbishments/{id}/complete/` (`work_summary`, `labour_cost_rwf`) · `POST /api/refurbishments/{id}/unable-to-repair/` (`reason`) · `POST /api/refurbishments/{id}/cancel/` (`reason`) · `GET/POST /api/refurbishments/{id}/steps/` · `PATCH /api/refurbishment-steps/{id}/` · `GET/POST /api/refurbishments/{id}/items/` · `PATCH /api/refurbishment-items/{id}/` · `GET/POST /api/refurbishments/{id}/attachments/` · `GET /api/refurbishments/technicians/`. Read: `device.view`; write: `refurbishment.manage`. |
-| Dispositions | `GET/POST /api/dispositions/` · `GET /api/dispositions/{id}/` · `POST /api/dispositions/{id}/confirm/` |
-| AI | `GET /api/assessments/{id}/ai-recommendation/` (`ai.view`) · `POST /api/assessments/{id}/ai-recommendation/` (`ai.request`) · `POST /api/assessments/{id}/decision/` (`ai.decide`; body `final_decision`, `reason`) · `POST /api/assessments/{id}/ai-feedback/` (`ai.feedback`; body `verdict`, `comment`) · `GET /api/ai-recommendations/` (`ai.view`; `?decision=pending\|decided&recommendation=&outcome=ACCEPTED\|OVERRIDDEN&search=`). Pricing/channel endpoints come with the disposition phase. |
+| Dispositions | `GET/POST /api/dispositions/` (`?device=&type=REALLOCATION\|RESALE&status=DRAFT\|CONFIRMED&search=&date_from=&date_to=&page=`) · `GET/PATCH /api/dispositions/{id}/` (PATCH only while Draft) · `POST /api/dispositions/{id}/confirm/` · `GET/POST /api/dispositions/{id}/attachments/`. Read: `device.view`; write: `disposition.create`. |
+| AI | `GET /api/assessments/{id}/ai-recommendation/` (`ai.view`) · `POST /api/assessments/{id}/ai-recommendation/` (`ai.request`) · `POST /api/assessments/{id}/decision/` (`ai.decide`; body `final_decision`, `reason`) · `POST /api/assessments/{id}/ai-feedback/` (`ai.feedback`; body `verdict`, `comment`) · `GET /api/ai-recommendations/` (`ai.view`; `?decision=pending\|decided&recommendation=&outcome=ACCEPTED\|OVERRIDDEN&search=`). Pricing/channel recommendations are future work. |
 | Notifications | `GET /api/notifications/` · `GET /api/notifications/unread-count/` · `POST /api/notifications/{id}/read/` · `POST /api/notifications/read-all/` · `POST /api/notifications/announcements/` (admin) |
 | Dashboards & analytics | `GET /api/dashboard/` (content depends on role) · `GET /api/analytics/summary/` · `GET /api/analytics/lifecycle/` · `GET /api/analytics/financials/` · `GET /api/analytics/ai-effectiveness/` · `GET /api/analytics/export/?format=csv` |
 | Audit | `GET /api/audit-logs/` (`?user=&action=&entity_type=&entity_id=&from=&to=`) |

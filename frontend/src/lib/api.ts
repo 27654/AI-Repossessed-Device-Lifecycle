@@ -227,6 +227,8 @@ export interface Attachment {
   assessment_reference: string | null
   refurbishment: number | null
   refurbishment_reference: string | null
+  disposition: number | null
+  disposition_reference: string | null
 }
 
 export type DeviceFilters = Partial<
@@ -553,5 +555,62 @@ export const refurbishmentApi = {
     body.append('file', file)
     body.append('description', description)
     return apiRequest<Attachment>(`/refurbishments/${id}/attachments/`, { method: 'POST', body })
+  },
+}
+
+// --- Dispositions (reallocation / resale) ---
+
+export type DispositionType = 'REALLOCATION' | 'RESALE'
+
+export interface Disposition {
+  id: number
+  reference: string
+  device: number
+  device_summary: DeviceLabel
+  disposition_type: DispositionType
+  disposition_type_label: string
+  status: 'DRAFT' | 'CONFIRMED'
+  status_label: string
+  disposition_date: string
+  responsible_user: UserLabel
+  destination: string
+  recipient_reference: string
+  sale_price_rwf: number | null
+  buyer_reference: string
+  notes: string
+  confirmed_by: UserLabel | null
+  confirmed_at: string | null
+  attachments: Attachment[]
+  created_at: string
+  updated_at: string
+}
+
+// Fields an officer may set while the disposition is a draft. Fields of the other type are sent empty.
+export interface DispositionInput {
+  disposition_type: DispositionType
+  disposition_date: string
+  destination: string
+  recipient_reference: string
+  sale_price_rwf: number | null
+  buyer_reference: string
+  notes: string
+}
+
+export type DispositionFilters = Partial<
+  Record<'device' | 'type' | 'status' | 'search' | 'date_from' | 'date_to' | 'page', string>
+>
+
+export const dispositionApi = {
+  list: (filters: DispositionFilters) => apiRequest<Paginated<Disposition>>(`/dispositions/${queryString(filters)}`),
+  get: (id: number) => apiRequest<Disposition>(`/dispositions/${id}/`),
+  create: (device: number, input: DispositionInput) => post<Disposition>('/dispositions/', { device, ...input }),
+  update: (id: number, input: Partial<DispositionInput>) =>
+    apiRequest<Disposition>(`/dispositions/${id}/`, { method: 'PATCH', body: JSON.stringify(input) }),
+  confirm: (id: number) => post<Disposition>(`/dispositions/${id}/confirm/`),
+  uploadEvidence: (id: number, file: File, description: string) => {
+    const body = new FormData()
+    body.append('file', file)
+    body.append('description', description)
+    return apiRequest<Attachment>(`/dispositions/${id}/attachments/`, { method: 'POST', body })
   },
 }

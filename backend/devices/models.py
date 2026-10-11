@@ -160,11 +160,24 @@ def attachment_upload_to(instance, filename):
     return f"attachments/{timezone.now():%Y/%m}/{uuid.uuid4().hex}{extension}"
 
 
+# Lifecycle records an attachment can be evidence for (one nullable FK each).
+ATTACHMENT_LIFECYCLE_LINKS = ["recovery", "assessment", "refurbishment", "disposition"]
+
+
+def _at_most_one_set(fields):
+    condition = Q()
+    for i, first in enumerate(fields):
+        for second in fields[i + 1:]:
+            condition &= Q(**{f"{first}__isnull": True}) | Q(**{f"{second}__isnull": True})
+    return condition
+
+
 class Attachment(models.Model):
     """Photo or document about a device. Served only through the authenticated download endpoint.
 
     Every attachment belongs to a device. It may also be evidence for one
-    lifecycle record (a nullable FK per module: `recovery`, `assessment`, `refurbishment`); the record
+    lifecycle record (a nullable FK per module: `recovery`, `assessment`, `refurbishment`,
+    `disposition`); the record
     must be for the same device (checked in the services that link them).
     """
 
@@ -182,6 +195,9 @@ class Attachment(models.Model):
         blank=True,
         related_name="attachments",
     )
+    disposition = models.ForeignKey(
+        "dispositions.Disposition", on_delete=models.PROTECT, null=True, blank=True, related_name="attachments"
+    )
     file = models.FileField(upload_to=attachment_upload_to, max_length=200)
     original_name = models.CharField(max_length=255)
     mime_type = models.CharField(max_length=50, choices=[(t, t) for t in ALLOWED_FILE_TYPES])
@@ -193,12 +209,10 @@ class Attachment(models.Model):
     class Meta:
         ordering = ["-created_at", "-id"]
         constraints = [
-            # Evidence for at most one lifecycle record.
+            # Evidence for at most one lifecycle record: no two links set at once.
             models.CheckConstraint(
-                condition=(Q(recovery__isnull=True) & Q(assessment__isnull=True))
-                | (Q(recovery__isnull=True) & Q(refurbishment__isnull=True))
-                | (Q(assessment__isnull=True) & Q(refurbishment__isnull=True)),
-                name="attachment_single_lifecycle_link_v2",
+                condition=_at_most_one_set(ATTACHMENT_LIFECYCLE_LINKS),
+                name="attachment_single_lifecycle_link_v3",
             ),
         ]
 

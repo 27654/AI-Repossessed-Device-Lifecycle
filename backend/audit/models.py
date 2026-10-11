@@ -48,6 +48,9 @@ class AuditAction(models.TextChoices):
     REFURBISHMENT_COMPLETED = "REFURBISHMENT_COMPLETED", "Refurbishment completed"
     REFURBISHMENT_UNABLE_TO_REPAIR = "REFURBISHMENT_UNABLE_TO_REPAIR", "Refurbishment closed: unable to repair"
     REFURBISHMENT_CANCELLED = "REFURBISHMENT_CANCELLED", "Work order cancelled"
+    DISPOSITION_CREATED = "DISPOSITION_CREATED", "Disposition drafted"
+    DISPOSITION_UPDATED = "DISPOSITION_UPDATED", "Disposition draft updated"
+    DISPOSITION_CONFIRMED = "DISPOSITION_CONFIRMED", "Disposition confirmed"
 
 
 class AuditLogQuerySet(models.QuerySet):
